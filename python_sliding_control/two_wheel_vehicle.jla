@@ -1,0 +1,113 @@
+using PyPlot
+using LinearAlgebra
+
+# 4次Runge-Kutta法による状態遷移 #
+# 入力は零次ホールドを仮定 #
+function rk4(x, u, dt, F)
+    k1 = F(x, u);
+    k2 = F(x+k1*dt/2, u);
+    k3 = F(x+k2*dt/2, u);
+    k4 = F(x+k3*dt, u);
+
+    return x + dt/6 * (k1 + 2*k2 + 2*k3 + k4);
+end
+
+# 飽和関数 #
+function sat(x)
+    return sign.(x) .* min(1, abs.(x));
+end
+
+function main_car()
+    close("all");
+
+    # サンプリング周期と時間ベクトル #
+    dt = 0.01;
+    t = 0:dt:25;
+
+    # 速度 #
+    V = 10.0;
+    # システムの定義 #
+    # dx(t)/dt = f(x(t))+Bu(t) #
+    f = x-> [
+        V*sin(x[2]);
+        0
+    ];
+    B = [
+        0;
+        1
+    ];
+
+    # 進行方向(X)も含めた3次元モデル(シミュレーション用) #
+    # dx(t)/dt = F(x(t),u(t)) #
+    F = (x,u) -> [
+        V*cos(x[3]);
+        V*sin(x[3]);
+        u
+    ];
+
+    # 状態変数ベクトル #
+    x = zeros(3, length(t));
+    # 初期状態(初期位置±50、初期角度±π) #
+    x[:,1] = [
+        2*(rand(2, 1).-0.5) * 50;
+        2*(rand(1, 1).-0.5) * pi;
+    ];
+    # 入力 #
+    u = zeros(1, length(t));
+
+    # 滑り曲面の決定 #
+    z = V + 0.1;
+    S = x -> x[1] + V*sin(x[2]) + z*rem.(x[2], 2*pi, RoundNearest);
+    # 符号関数の近似 #
+    sig = S -> sat(5*S);
+    # ゲイン #
+    K = 15;
+
+    # シミュレーションループ #
+    for k in 1:length(t)-1
+        # ∂S/∂x #
+        Sx = [1 V*cos(x[3,k])+z];
+
+        u[k] = -(Sx*B)\(Sx*f(x[2:3,k])+[K*sig(S(x[2:3,k]))]);
+        x[:,k+1] = rk4(x[:,k], u[k], dt, F);
+    end
+
+    # プロット #
+    figure();
+    subplot(3,1,1);
+    plot(t, x[2,:]);
+    ylabel(L"Y");
+    grid("on");
+    title("time series");
+
+    subplot(3,1,2);
+    plot(t, x[3,:]);
+    ylabel(L"\theta");
+    grid("on");
+
+    subplot(3,1,3);
+    plot(t, u[1,:]);
+    ylabel(L"u");
+
+    grid("on");
+
+    figure();
+    theta = pi*(-1:0.01:1);
+    plot(-V*sin.(theta)-z*theta, theta, "k--", label = "sliding surface");
+    plot(x[2,:], rem.(x[3,:], 2*pi, RoundNearest), label = "state trajectory");
+    grid("on");
+    xlabel(L"Y");
+    ylabel(L"\theta");
+    legend();
+    title("state space");
+
+    figure();
+    plot(x[1,:], x[2,:]);
+    quiver(x[1,1:200:end], x[2,1:200:end], cos.(x[3,1:200:end]), sin.(x[3,1:200:end]), angles = "xy");
+    xlabel(L"X");
+    ylabel(L"Y");
+    title("position");
+    grid("on");
+    show();
+end
+main_car()
