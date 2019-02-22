@@ -109,6 +109,10 @@ private:
 #endif
         Py_SetProgramName(name);
         Py_Initialize();
+        //PyObject *sys = PyImport_ImportModule("sys");
+        //PyObject *path = PyObject_GetAttrString(sys, "path");
+        //PyList_Append(path,PyUnicode_DecodeFSDefault("/home/leus/.pyenv/versions/3.7.2/lib/python3.7"));
+        //PyList_Append(path,PyUnicode_DecodeFSDefault("/home/leus/.pyenv/versions/sandbox/lib/python3.7/site-packages"));
 
 #ifndef WITHOUT_NUMPY
         import_numpy(); // initialize numpy C-API
@@ -1313,7 +1317,7 @@ inline void axis(const std::string &axisstr)
     PyTuple_SetItem(args, 0, str);
 
     PyObject* res = PyObject_CallObject(detail::_interpreter::get().s_python_function_axis, args);
-    if(!res) throw std::runtime_error("Call to title() failed.");
+    if(!res) throw std::runtime_error("Call to axis() failed.");
 
     Py_DECREF(args);
     Py_DECREF(res);

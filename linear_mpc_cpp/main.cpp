@@ -19,7 +19,7 @@ public:
   }
   void lap(const std::string& msg) {
     const auto duration_time = std::chrono::system_clock::now() - start_;
-    const auto duration_ns = std::chrono::duration_cast<std::chrono::milliseconds>(duration_time);
+    const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration_time);
     std::cerr << "[" << duration_ns.count() << " ns] " << msg << std::endl;
   }
   virtual ~ScopedTime() {
@@ -47,11 +47,23 @@ class Parameters {
 public:
   Parameters() {
     R.diagonal() << 0.1, 0.1;
-    Rd.diagonal() << 0.001, 0.001;
+    Rd.diagonal() << 0.1, 0.1;
     Q.diagonal() << 1, 1, 0.1, 0.0, 0.5;
     Qf = Q;
   }
   virtual ~Parameters() {}
+  void print(std::ostream& os = std::cout) {
+    os << "R:" << std::endl;
+    os << R << std::endl;
+    os << "Rd:" << std::endl;
+    os << Rd << std::endl;
+    os << "Q:" << std::endl;
+    os << Q << std::endl;
+    os << "Qf:" << std::endl;
+    os << Qf << std::endl;
+  }
+
+
   Eigen::Matrix2d R;
   Eigen::Matrix2d Rd;
   Eigen::Matrix<double, 5, 5> Q;
@@ -63,15 +75,15 @@ public:
 
   double target_speed = 3.0;
   int n_indices_search = 10;
-  double dt = 0.2;
+  const double dt = 0.1;
 
   const double dl = 0.2;  // course tick
 
   int horizon = 5;  // horizon length
   std::string course_path;
 
-  int max_iterations = 10;
-  double du_th = 0.1;
+  int max_iterations = 50;
+  double du_th = 0.001;
 };
 
 class VehicleParameters {
@@ -279,6 +291,14 @@ public:
     state_(4) = v;
   }
 
+  void set_state(const Eigen::MatrixXd& state) {
+    state_ = state;
+  }
+
+  const Eigen::VectorXd& get_state() const {
+    return state_;
+  }
+
   void get_state(double& x, double& y, double& theta, double& thetadot, double& v) {
     x = state_(0);
     y = state_(1);
@@ -318,7 +338,7 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
 
   double travel = 0.0;
   for (int i = 1; i < params->horizon + 1; i++) {
-    travel += std::abs(v.state_(4)) * params->dt;
+    travel += std::abs(v.get_state()(4)) * params->dt;
     int dind = static_cast<int>(travel / params->dl);
     int j = i_closest + dind;
     if (j >= c.size()) {
@@ -342,9 +362,9 @@ bool iterative_linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref,
   int i = 0;
   bool sol_found = false;
   for (; i < params->max_iterations; i++) {
-    auto xbar = v.predict_motion(v.state_, ou, xref);
+    auto xbar = v.predict_motion(v.get_state(), ou, xref);
     Eigen::MatrixXd prev_ou = ou;
-    sol_found = linear_mpc_control(v, xref, xbar, v.state_, params, ou);
+    sol_found = linear_mpc_control(v, xref, xbar, v.get_state(), params, ou);
     if (!sol_found) {
       LOG(WARNING) << "Solution not found (iter:" << i << ")";
       continue;
@@ -388,17 +408,19 @@ public:
 
     Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_(vehicle_->num_state_, params_->horizon + 1);
     Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> xdiff_(vehicle_->num_state_, params_->horizon + 1),
-        udiff_(vehicle_->num_input_, params_->horizon + 1), deriv_(vehicle_->num_input_, params_->horizon);
+        udiff_(vehicle_->num_input_, params_->horizon - 1);
 
     x_.col(0) = x0_.cast<T>();
     for (int t = 0; t < params_->horizon; t++) {
       vehicle_->get_linear_matrix(xbar_.cast<double>()(4, t), xbar_.cast<double>()(2, t), A_, B_, C_);
       x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u.col(t) + C_;
-      if (t != 0) {
-        xdiff_.col(t) = x_.col(t) - xref_.col(t);
-      }
       if (t < params_->horizon - 1) {
         udiff_.col(t) = u.col(t + 1) - u.col(t);
+      }
+    }
+    for (int t = 0; t < params_->horizon + 1; t++) {
+      if (t != 0) {
+        xdiff_.col(t) = x_.col(t) - xref_.col(t);
       }
     }
     residuals[0] =
@@ -406,7 +428,8 @@ public:
               .cwiseProduct(params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon)))
              .sum() +
          (udiff_.cwiseProduct(params_->Rd.cast<T>() * udiff_)).sum() +
-         (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum());
+         (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum() +
+         (u.cwiseProduct(params_->R.cast<T>() * u)).sum());
 
     return true;
   }
@@ -448,7 +471,7 @@ private:
   mutable Eigen::VectorXd x0_;
   mutable Eigen::MatrixXd A_, B_;
   mutable Eigen::VectorXd C_;
-  mutable Eigen::MatrixXd xref_, xbar_;
+  Eigen::MatrixXd xref_, xbar_;
 
   // mutable Eigen::MatrixXd A_, B_,Bd_, Q_, Q_final_,  R_, R_delta_, disturbance_, insecure_, u_ss_, x_ss_, x0_,
   // u_prev_, x_states, u, deriv_wrt_u, u_past, lambdas_x, lambdas_u,lambdas_u_ref, u_horizon, u_current;
@@ -464,8 +487,8 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
   ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, u, parameter_blocks, x0, xref, xbar);
   prob.AddResidualBlock(costfn, NULL, parameter_blocks);
   for (int i = 0; i < u.size(); i++) {
-    prob.SetParameterLowerBound(parameter_blocks[0], i, v.vparams_.min_speed);
-    prob.SetParameterUpperBound(parameter_blocks[0], i, v.vparams_.max_speed);
+    prob.SetParameterLowerBound(parameter_blocks[0], i, -v.vparams_.max_motor_torque);
+    prob.SetParameterUpperBound(parameter_blocks[0], i, v.vparams_.max_motor_torque);
   }
 
   ceres::Solver::Options options;
@@ -473,9 +496,9 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
   //<< "Invalid minimizer: " << FLAGS_minimizer << ", valid options are: trust_region and line_search.";
   options.minimizer_type = ceres::MinimizerType::TRUST_REGION;
 
-  options.minimizer_progress_to_stdout = true;
+  options.minimizer_progress_to_stdout = false;
   options.max_num_iterations = 100;
-  options.linear_solver_type = ceres::CGNR;
+  options.linear_solver_type = ceres::DENSE_QR; //CGNR;
 
   ceres::Solver::Summary summary;
 
@@ -498,8 +521,18 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   Vehicle vehicle(params);
   const WayPoint& w = c.waypoints[0];
-  vehicle.set_state(w.x, w.y, normalize_angle(w.theta + M_PI / 6.0), 0, 0);
+  vehicle.set_state(w.x, w.y, normalize_angle(w.theta - M_PI / 6.0), 0, 0);
 
+  //Eigen::MatrixXd A, B;
+  //Eigen::VectorXd C(5);
+  //vehicle.get_linear_matrix(1.0, 0.5, A, B, C);
+  //std::cout << "A" << std::endl;
+  //std::cout << A << std::endl;
+  //std::cout << "B" << std::endl;
+  //std::cout << B << std::endl;
+  //std::cout << "C" << std::endl;
+  //std::cout << C << std::endl;
+  //std::cout << "----" << std::endl;
   std::vector<double> logging_x, logging_y, logging_theta, logging_thetadot, logging_v, logging_t;
   std::vector<Eigen::Vector2d> logging_u;
 
@@ -521,20 +554,30 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   Eigen::MatrixXd xref;
   while (t < params->max_time) {
+    LOG(INFO) << "------------------------------------------------------------------------------------------------------------------------------";
     std::tie(xref, target_index) = calc_ref_trajectory(vehicle, c, params, target_index);
     bool sol_found = iterative_linear_mpc_control(vehicle, xref, ou, params);
     if (!sol_found) {
       LOG(WARNING) << "Failed to compute control. exit.";
       return;
     }
-    Eigen::MatrixXd motion = vehicle.predict_motion(vehicle.state_, ou, xref);
-
-    vehicle.state_ = vehicle.next_state(vehicle.state_, ou.col(0));
-    logging_x.push_back(vehicle.state_(0));
-    logging_y.push_back(vehicle.state_(1));
-    logging_theta.push_back(vehicle.state_(2));
-    logging_thetadot.push_back(vehicle.state_(3));
-    logging_v.push_back(vehicle.state_(4));
+    //ou(0, 0) = 0.093;
+    //ou(1, 0) = 0.09;
+    Eigen::MatrixXd motion = vehicle.predict_motion(vehicle.get_state(), ou, xref);
+    LOG(INFO) << "-- state:  ----";
+    LOG(INFO) << vehicle.get_state();
+    LOG(INFO) << "-- input:  ----";
+    LOG(INFO) << ou(0, 0) << ", " << ou(1, 0);
+    LOG(INFO) << "-- inputs: ----";
+    LOG(INFO) << ou;
+    LOG(INFO) << "---------------";
+    vehicle.set_state(vehicle.next_state(vehicle.get_state(), ou.col(0)));
+    logging_x.push_back(vehicle.get_state()(0));
+    logging_y.push_back(vehicle.get_state()(1));
+    logging_theta.push_back(vehicle.get_state()(2));
+    logging_thetadot.push_back(vehicle.get_state()(3));
+    logging_v.push_back(vehicle.get_state()(4));
+    logging_u.push_back(ou.col(0));
 
     c.plot();
 
@@ -561,12 +604,13 @@ void main1(const std::shared_ptr<Parameters>& params) {
     plt::axis("equal");
     plt::grid(true);
     std::stringstream ss;
-    ss << "time[s] " << t << " | speed[m/s] " << vehicle.state_(4);
+    ss << "time[s] " << t << " | speed[m/s] " << vehicle.get_state()(4);
     plt::title(ss.str());
     plt::pause(0.0001);
     plt::clf();
 
     t += params->dt;
+    //std::cin.get();
   }
 }
 
@@ -578,6 +622,8 @@ int main(int argc, char* argv[]) {
 
   std::shared_ptr<Parameters> params = std::make_shared<Parameters>();
   params->course_path = FLAGS_course_path;
+
+  params->print(LOG(INFO));
   main1(params);
   return 0;
 }
