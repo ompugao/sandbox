@@ -118,11 +118,16 @@ public:
   }
   void load_csv(const std::string& path) {
     waypoints.clear();
+    xs.clear();
+    ys.clear();
+
     io::CSVReader<4> in(path);
     in.read_header(io::ignore_extra_column, "cx", "cy", "ctheta", "ck");
     double cx, cy, ctheta, ck;
     while (in.read_row(cx, cy, ctheta, ck)) {
       waypoints.emplace_back(WayPoint(cx, cy, ctheta));
+      xs.emplace_back(cx);
+      ys.emplace_back(cy);
     }
   }
 
@@ -162,7 +167,14 @@ public:
     }
   }
 
+  void plot() {
+    plt::plot(xs, ys, "-r");
+  }
+
   std::vector<WayPoint> waypoints;
+
+  // for visualization
+  std::vector<double> xs, ys;
 };
 
 class Vehicle {
@@ -207,12 +219,10 @@ public:
     double radius = vparams_.width / 2.0;
     const int n = 200;
     std::vector<double> x(n + 1), y(n + 1);
-    for (int i = 0; i < n; i++) {
-      x[i] = radius * std::cos(i / 2 * M_PI);
-      y[i] = radius * std::sin(i / 2 * M_PI);
+    for (int i = 0; i < n+1; i++) {
+      x[i] = state_(0) + radius * std::cos(i * 1.0 / (2 * M_PI));
+      y[i] = state_(1) + radius * std::sin(i * 1.0 / (2 * M_PI));
     }
-    x[n] = 1;
-    y[n] = 0;
     plt::plot(x, y, "r-");
     plt::plot({state_(0), state_(0) + std::cos(state_(2)) * radius},
               {state_(1), state_(1) + std::sin(state_(2)) * radius}, "r-");
@@ -294,7 +304,7 @@ public:
 
 std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Course& c,
                                                     const std::shared_ptr<Parameters>& params, int pind) {
-  auto xref = Eigen::MatrixXd(v.num_state_, params->horizon+1);
+  Eigen::MatrixXd xref = Eigen::MatrixXd(v.num_state_, params->horizon + 1);
   int i_closest = v.find_nearest_index(c, pind);
 
   if (i_closest <= pind) {
@@ -307,13 +317,14 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
   xref(4, 0) = c.waypoints[i_closest].speed;
 
   double travel = 0.0;
-  for (int i = 0; i < params->horizon + 1; i++) {
+  for (int i = 1; i < params->horizon + 1; i++) {
     travel += std::abs(v.state_(4)) * params->dt;
     int dind = static_cast<int>(travel / params->dl);
     int j = i_closest + dind;
     if (j >= c.size()) {
       j = c.size() - 1;
     }
+    std::cout << "-- " << j << std::endl;
     const WayPoint& w = c.waypoints[j];
     xref(0, i) = w.x;
     xref(1, i) = w.y;
@@ -326,25 +337,27 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
 
 bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar,
                         const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou);
-void iterative_linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, Eigen::MatrixXd& ou,
+bool iterative_linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, Eigen::MatrixXd& ou,
                                   const std::shared_ptr<Parameters>& params) {
   int i = 0;
+  bool sol_found = false;
   for (; i < params->max_iterations; i++) {
     auto xbar = v.predict_motion(v.state_, ou, xref);
     Eigen::MatrixXd prev_ou = ou;
-    bool sol_found = linear_mpc_control(v, xref, xbar, v.state_, params, ou);
+    sol_found = linear_mpc_control(v, xref, xbar, v.state_, params, ou);
     if (!sol_found) {
       LOG(WARNING) << "Solution not found (iter:" << i << ")";
       continue;
     }
     double udiff = (ou - prev_ou).cwiseAbs().sum();
-    //double udiff = 0;
+    // double udiff = 0;
     if (udiff < params->du_th) {
       LOG(INFO) << "udiff: " << udiff;
       break;
     }
   }
   LOG(INFO) << "-- iteration : " << i;
+  return sol_found;
 }
 
 // static int kStride = 10;
@@ -380,7 +393,7 @@ public:
     x_.col(0) = x0_.cast<T>();
     for (int t = 0; t < params_->horizon; t++) {
       vehicle_->get_linear_matrix(xbar_.cast<double>()(4, t), xbar_.cast<double>()(2, t), A_, B_, C_);
-      x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u + C_;
+      x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u.col(t) + C_;
       if (t != 0) {
         xdiff_.col(t) = x_.col(t) - xref_.col(t);
       }
@@ -389,10 +402,11 @@ public:
       }
     }
     residuals[0] =
-        ((xdiff_.block(0, 0, x0_.rows(), params_->horizon).cwiseProduct(params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon))).sum() + 
+        ((xdiff_.block(0, 0, x0_.rows(), params_->horizon)
+              .cwiseProduct(params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon)))
+             .sum() +
          (udiff_.cwiseProduct(params_->Rd.cast<T>() * udiff_)).sum() +
          (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum());
-
 
     return true;
   }
@@ -413,11 +427,16 @@ public:
   // }
 
   static ceres::CostFunction* Create(const Vehicle& vehicle, const std::shared_ptr<Parameters>& params,
-                                     std::vector<double*>& parameter_blocks, const Eigen::VectorXd& x0,
-                                     const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar) {
+                                     Eigen::MatrixXd& u, std::vector<double*>& parameter_blocks,
+                                     const Eigen::VectorXd& x0, const Eigen::MatrixXd& xref,
+                                     const Eigen::MatrixXd& xbar) {
     MPCCostFunctor* costfunctor = new MPCCostFunctor(vehicle, params, x0, xref, xbar);
     ceres::DynamicCostFunction* costfn = new ceres::DynamicAutoDiffCostFunction<MPCCostFunctor, 5>(costfunctor);
-    costfn->AddParameterBlock(parameter_blocks.size());
+    // for (int i = 0; i < u.cols(); i++) {
+    // parameter_blocks.push_back(&u.data()[u.rows()*i]);
+    //}
+    parameter_blocks.push_back(u.data());
+    costfn->AddParameterBlock(u.size());
     costfn->SetNumResiduals(1);
     return costfn;
   }
@@ -439,21 +458,10 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
                         const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou) {
   ceres::Problem prob;
 
-  // ceres::CostFunction* costfn = new ceres::AutoDiffCostFunction<CostFunctor, 1, 1>(new CostFunctor);
-  // prob.AddResidualBlock(costfn, NULL, &x);
-  // prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F1, 1, 1, 1>(new F1), NULL, &x1, &x2);
-  // prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F2, 1, 1, 1>(new F2), NULL, &x3, &x4);
-  // prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F3, 1, 1, 1>(new F3), NULL, &x2, &x3);
-  // prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F4, 1, 1, 1>(new F4), NULL, &x1, &x4);
-
   Eigen::MatrixXd u =
       Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(v.num_input_, params->horizon);
   std::vector<double*> parameter_blocks;
-  // for (int i = 0; i < u.cols(); i++) {
-  //  parameter_blocks.push_back(&u.data()[u.rows()*i]);
-  //}
-  parameter_blocks.push_back(u.data());
-  ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, parameter_blocks, x0, xref, xbar);
+  ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, u, parameter_blocks, x0, xref, xbar);
   prob.AddResidualBlock(costfn, NULL, parameter_blocks);
   for (int i = 0; i < u.size(); i++) {
     prob.SetParameterLowerBound(parameter_blocks[0], i, v.vparams_.min_speed);
@@ -514,7 +522,51 @@ void main1(const std::shared_ptr<Parameters>& params) {
   Eigen::MatrixXd xref;
   while (t < params->max_time) {
     std::tie(xref, target_index) = calc_ref_trajectory(vehicle, c, params, target_index);
-    iterative_linear_mpc_control(vehicle, xref, ou, params);
+    bool sol_found = iterative_linear_mpc_control(vehicle, xref, ou, params);
+    if (!sol_found) {
+      LOG(WARNING) << "Failed to compute control. exit.";
+      return;
+    }
+    Eigen::MatrixXd motion = vehicle.predict_motion(vehicle.state_, ou, xref);
+
+    vehicle.state_ = vehicle.next_state(vehicle.state_, ou.col(0));
+    logging_x.push_back(vehicle.state_(0));
+    logging_y.push_back(vehicle.state_(1));
+    logging_theta.push_back(vehicle.state_(2));
+    logging_thetadot.push_back(vehicle.state_(3));
+    logging_v.push_back(vehicle.state_(4));
+
+    c.plot();
+
+    std::vector<double> mpc_x, mpc_y;
+    for (int i = 0; i < motion.cols(); i++) {
+      mpc_x.push_back(motion(0, i));
+      mpc_y.push_back(motion(1, i));
+    }
+    plt::plot(mpc_x, mpc_y, "xr");
+
+    auto& w = c.waypoints[target_index];
+    plt::plot({w.x}, {w.y}, "xg");
+
+    std::vector<double> ref_x, ref_y;
+    for (int i = 0; i < xref.cols(); i++) {
+      ref_x.push_back(xref(0, i));
+      ref_y.push_back(xref(1, i));
+    }
+    plt::plot(ref_x, ref_y, "xk");
+
+    plt::plot(logging_x, logging_y, "ob");
+    vehicle.plot();
+
+    plt::axis("equal");
+    plt::grid(true);
+    std::stringstream ss;
+    ss << "time[s] " << t << " | speed[m/s] " << vehicle.state_(4);
+    plt::title(ss.str());
+    plt::pause(0.0001);
+    plt::clf();
+
+    t += params->dt;
   }
 }
 
