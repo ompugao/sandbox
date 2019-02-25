@@ -20,4 +20,4 @@ include_directories(${PYTHON_INCLUDE_PATH} ${PYTHON_NUMPY_INCLUDE_DIRS})
 
 # main
 add_executable(main main.cpp)
-target_link_libraries(main ${CERES_LIBRARIES} ${PYTHON_LIBRARIES} gflags)
+target_link_libraries(main ${CERES_LIBRARIES} ${PYTHON_LIBRARIES} gflags stdc++fs)
