@@ -48,6 +48,39 @@ double normalize_angle(double angle) {
   return a;
 }
 
+class Obstacle {
+  public:
+    Obstacle(double x, double y, double r, double circumscribed_area_cost, double inflation_radius) {
+      x_ = x;
+      y_ = y;
+      r_ = r;
+      // TODO get radius of vehicle
+      //double infl = r - inflation_radius;
+      //if (std::abs(infl) < 1) {
+      //  LOG(WARNING) << "inflation radius is too small! r: " << r << ", inflation radius: " << inflation_radius;
+      //  infl = 1;
+      //}
+      a_ = circumscribed_area_cost / (inflation_radius * inflation_radius);
+    }
+    virtual ~Obstacle() {
+    }
+
+    const double& x() {
+      return x_;
+    }
+    const double& y() {
+      return y_;
+    }
+    const double& r() {
+      return r_;
+    }
+    const double& a() {
+      return a_;
+    }
+    double x_, y_, r_;
+    double a_;
+};
+
 class Parameters {
 public:
   Parameters() {
@@ -116,6 +149,20 @@ public:
     if (obj.find("du_th") != obj.end()) {
       du_th = obj["du_th"].get<double>();
     }
+    if (obj.find("circumscribed_area_cost") != obj.end()) {
+      circumscribed_area_cost = obj["circumscribed_area_cost"].get<double>();
+    }
+    if (obj.find("inflation_radius") != obj.end()) {
+      inflation_radius = obj["inflation_radius"].get<double>();
+    }
+    if (obj.find("obstacles") != obj.end()) {
+      picojson::array arr = obj["obstacles"].get<picojson::array>();
+      obstacles.clear();
+      for (auto&& v : arr) {
+        auto& a = v.get<picojson::array>();
+        obstacles.emplace_back(Obstacle(a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), circumscribed_area_cost, inflation_radius));
+      }
+    }
   }
   virtual ~Parameters() {}
   void print(std::ostream& os = std::cout) {
@@ -150,6 +197,10 @@ public:
 
   int max_iterations = 50;
   double du_th = 0.001;
+
+  double circumscribed_area_cost = 10;
+  double inflation_radius = 5;
+  std::vector<Obstacle> obstacles;
 };
 
 class VehicleParameters {
@@ -173,7 +224,7 @@ public:
   const double max_speed = 5.0;
   const double min_speed = -2.0;
 
-  const double max_motor_torque = 3.1415;
+  const double max_motor_torque = 1.57;
   const double max_motor_torque_vel = 1.57;
 };
 
@@ -185,14 +236,6 @@ public:
   double y;
   double theta;
   double speed;
-};
-
-class Obstacle {
-  public:
-    Obstacle() {
-    }
-    virtual ~Obstacle() {
-    }
 };
 
 class Course {
@@ -504,6 +547,26 @@ public:
     residuals[1] = (udiff_.cwiseProduct(params_->Rd.cast<T>() * udiff_)).sum();
     residuals[2] = (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum();
     residuals[3] = (u.cwiseProduct(params_->R.cast<T>() * u)).sum();
+    residuals[4] = (T)0.0;
+    //double denom = (2 * params_->inflation_radius * params_->inflation_radius);
+    //double numer = params_->circumscribed_area_cost / (std::sqrt(2*M_PI) * params_->inflation_radius);
+
+    for (auto&& o : params_->obstacles) {
+      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(5, 1);
+      pos << o.x(), o.y(), 0.0, 0.0, 0.0;
+      Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_from_obstacle(vehicle_->num_state_, params_->horizon + 1);
+      x_from_obstacle.block(0, 0, 2, x_.cols()) = x_.block(0, 0, 2, x_.cols());
+      for (int t = 0; t < params_->horizon + 1; t++) {
+        x_from_obstacle.col(t) -= pos.cast<T>();
+        T d = x_from_obstacle.col(t).squaredNorm();
+        T b = (T)(params_->inflation_radius + o.r());
+        if (d < b) {
+          residuals[4] += (T)(o.a()) * (d - b) * (d - b);
+        }
+      }
+      //residuals[4] += x_from_obstacle.colwise().squaredNorm().exp().sum();
+      //residuals[4] += (-((x_.block(0, 0, 2, x_.cols()).colwise() - pos).colwise().squaredNorm())).exp().sum();
+    }
 
     return true;
   }
@@ -534,7 +597,7 @@ public:
     //}
     parameter_blocks.push_back(u.data());
     costfn->AddParameterBlock(u.size());
-    costfn->SetNumResiduals(4);
+    costfn->SetNumResiduals(5);
     return costfn;
   }
 
@@ -574,7 +637,7 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
   options.minimizer_type = ceres::MinimizerType::TRUST_REGION;
 
   options.minimizer_progress_to_stdout = false;
-  options.max_num_iterations = 20;
+  options.max_num_iterations = 40;
   options.linear_solver_type = ceres::DENSE_QR; //CGNR;
 
   options.update_state_every_iteration = true;
@@ -591,6 +654,18 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
 
   //ou = u;
   return summary.IsSolutionUsable();
+}
+
+void plot_obstacles(const std::shared_ptr<Parameters>& params) {
+  for (auto&& o : params->obstacles) {
+    const int n = 100;
+    std::vector<double> x(n + 1), y(n + 1);
+    for (int i = 0; i < n+1; i++) {
+      x[i] = o.x() + o.r() * std::cos(i * 1.0 / (2 * M_PI));
+      y[i] = o.y() + o.r() * std::sin(i * 1.0 / (2 * M_PI));
+    }
+    plt::plot(x, y, "g-");
+  }
 }
 
 void main1(const std::shared_ptr<Parameters>& params) {
@@ -667,6 +742,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
     logging_t.push_back(t);
 
     c.plot();
+    plot_obstacles(params);
 
     std::vector<double> mpc_x, mpc_y;
     for (int i = 0; i < motion.cols(); i++) {
@@ -699,9 +775,9 @@ void main1(const std::shared_ptr<Parameters>& params) {
     plt::clf();
 
     t += params->dt;
-    //if (t == params->dt) {
-      //std::cin.get();
-    //}
+    if (t == params->dt) {
+      std::cin.get();
+    }
     if (vehicle.is_arrived(c, w, target_index)) {
       break;
     }
@@ -761,6 +837,8 @@ int main(int argc, char* argv[]) {
   }
 
   params->print(LOG(INFO));
+  std::cout << "press <Enter> to start..." << std::endl;
+  std::cin.get();
   main1(params);
   return 0;
 }
