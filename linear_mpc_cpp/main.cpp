@@ -3,6 +3,9 @@
 #include <string>
 #include <chrono>
 #include <cmath>
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#include <fstream>
 
 #include <ceres/ceres.h>
 #include <gflags/gflags.h>
@@ -11,6 +14,8 @@
 #include "matplotlibcpp.h"
 namespace plt = matplotlibcpp;
 #include "csv.h"
+
+#include "picojson.h"
 
 class ScopedTime {
 public:
@@ -47,9 +52,70 @@ class Parameters {
 public:
   Parameters() {
     R.diagonal() << 0.1, 0.1;
-    Rd.diagonal() << 0.1, 0.1;
-    Q.diagonal() << 1, 1, 0.1, 0.0, 0.5;
+    Rd.diagonal() << 10, 10;
+    Q.diagonal() << 1, 1, 0.1, 0.0, 10.0;
     Qf = Q;
+  }
+
+  void load_json(picojson::value& v) {
+    auto& obj = v.get<picojson::object>();
+    if (obj.find("R") != obj.end()) {
+      picojson::array arr = obj["R"].get<picojson::array>();
+      for (int i = 0; i < R.cols(); i++) {
+        R(i, i) = arr[i].get<double>();
+      }
+    }
+    if (obj.find("Rd") != obj.end()) {
+      picojson::array arr = obj["Rd"].get<picojson::array>();
+      for (int i = 0; i < Rd.cols(); i++) {
+        Rd(i, i) = arr[i].get<double>();
+      }
+    }
+    if (obj.find("Q") != obj.end()) {
+      picojson::array arr = obj["Q"].get<picojson::array>();
+      for (int i = 0; i < Q.cols(); i++) {
+        Q(i, i) = arr[i].get<double>();
+      }
+    }
+    if (obj.find("Qf") != obj.end()) {
+      picojson::array arr = obj["Qf"].get<picojson::array>();
+      for (int i = 0; i < Qf.cols(); i++) {
+        Qf(i, i) = arr[i].get<double>();
+      }
+    }
+    if (obj.find("goal_distance_tolerance") != obj.end()) {
+      goal_distance_tolerance = obj["goal_distance_tolerance"].get<double>();
+    }
+    if (obj.find("stop_speed") != obj.end()) {
+      stop_speed = obj["stop_speed"].get<double>();
+    }
+    if (obj.find("max_time") != obj.end()) {
+      max_time = obj["max_time"].get<double>();
+    }
+    if (obj.find("target_speed") != obj.end()) {
+      target_speed = obj["target_speed"].get<double>();
+    }
+    if (obj.find("n_indices_search") != obj.end()) {
+      n_indices_search = obj["n_indices_search"].get<double>();
+    }
+    if (obj.find("dl") != obj.end()) {
+      dl = obj["dl"].get<double>();
+    }
+    if (obj.find("dt") != obj.end()) {
+      dt = obj["dt"].get<double>();
+    }
+    if (obj.find("horizon") != obj.end()) {
+      horizon = obj["horizon"].get<double>();
+    }
+    if (obj.find("course_path") != obj.end()) {
+      course_path = obj["course_path"].get<std::string>();
+    }
+    if (obj.find("max_iterations") != obj.end()) {
+      max_iterations = obj["max_iterations"].get<double>();
+    }
+    if (obj.find("du_th") != obj.end()) {
+      du_th = obj["du_th"].get<double>();
+    }
   }
   virtual ~Parameters() {}
   void print(std::ostream& os = std::cout) {
@@ -69,17 +135,17 @@ public:
   Eigen::Matrix<double, 5, 5> Q;
   Eigen::Matrix<double, 5, 5> Qf;
 
-  const double goal_distance_tolerance = 1.5;
-  const double stop_speed = 0.5;
-  const double max_time = 100;
+  double goal_distance_tolerance = 1.0;
+  double stop_speed = 0.2;
+  double max_time = 100;
 
   double target_speed = 3.0;
   int n_indices_search = 10;
-  const double dt = 0.1;
+  double dt = 0.2;
 
-  const double dl = 0.2;  // course tick
+  double dl = 0.2;  // course tick
 
-  int horizon = 5;  // horizon length
+  int horizon = 6;  // horizon length
   std::string course_path;
 
   int max_iterations = 50;
@@ -119,6 +185,14 @@ public:
   double y;
   double theta;
   double speed;
+};
+
+class Obstacle {
+  public:
+    Obstacle() {
+    }
+    virtual ~Obstacle() {
+    }
 };
 
 class Course {
@@ -362,26 +436,28 @@ bool iterative_linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref,
   int i = 0;
   bool sol_found = false;
   for (; i < params->max_iterations; i++) {
-    auto xbar = v.predict_motion(v.get_state(), ou, xref);
+    Eigen::MatrixXd xbar = v.predict_motion(v.get_state(), ou, xref);
     Eigen::MatrixXd prev_ou = ou;
     sol_found = linear_mpc_control(v, xref, xbar, v.get_state(), params, ou);
     if (!sol_found) {
       LOG(WARNING) << "Solution not found (iter:" << i << ")";
       continue;
     }
+    LOG(INFO) << "-- inputs at iteration " << i << ": ----";
+    LOG(INFO) << ou;
+    LOG(INFO) << "-------------------------------";
     double udiff = (ou - prev_ou).cwiseAbs().sum();
-    // double udiff = 0;
+    LOG(INFO) << ">> udiff: " << udiff;
     if (udiff < params->du_th) {
-      LOG(INFO) << "udiff: " << udiff;
       break;
     }
   }
-  LOG(INFO) << "-- iteration : " << i;
+  LOG(INFO) << "-- finished iteration : " << i;
   return sol_found;
 }
 
 // static int kStride = 10;
-class MPCCostFunctor {
+class MPCCostFunctor : public ceres::EvaluationCallback {
 public:
   // typedef ceres::DynamicAutoDiffCostFunction<MPCCostFunctor, kStride> MPCCostFunction;
   // typedef ceres::DynamicCostFunction MPCCostFunction;
@@ -418,18 +494,16 @@ public:
         udiff_.col(t) = u.col(t + 1) - u.col(t);
       }
     }
+    xdiff_.col(0).setZero();
     for (int t = 0; t < params_->horizon + 1; t++) {
       if (t != 0) {
         xdiff_.col(t) = x_.col(t) - xref_.col(t);
       }
     }
-    residuals[0] =
-        ((xdiff_.block(0, 0, x0_.rows(), params_->horizon)
-              .cwiseProduct(params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon)))
-             .sum() +
-         (udiff_.cwiseProduct(params_->Rd.cast<T>() * udiff_)).sum() +
-         (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum() +
-         (u.cwiseProduct(params_->R.cast<T>() * u)).sum());
+    residuals[0] = (xdiff_.block(0, 0, x0_.rows(), params_->horizon).cwiseProduct(params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon))).sum();
+    residuals[1] = (udiff_.cwiseProduct(params_->Rd.cast<T>() * udiff_)).sum();
+    residuals[2] = (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum();
+    residuals[3] = (u.cwiseProduct(params_->R.cast<T>() * u)).sum();
 
     return true;
   }
@@ -460,10 +534,13 @@ public:
     //}
     parameter_blocks.push_back(u.data());
     costfn->AddParameterBlock(u.size());
-    costfn->SetNumResiduals(1);
+    costfn->SetNumResiduals(4);
     return costfn;
   }
 
+  void PrepareForEvaluation(bool evaluate_jacobians, bool new_evaluation_point) override {
+
+  }
 private:
   std::shared_ptr<Parameters> params_;
   const Vehicle* vehicle_;
@@ -481,12 +558,12 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
                         const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou) {
   ceres::Problem prob;
 
-  Eigen::MatrixXd u =
-      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(v.num_input_, params->horizon);
+  //Eigen::MatrixXd u =
+      //Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(v.num_input_, params->horizon);
   std::vector<double*> parameter_blocks;
-  ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, u, parameter_blocks, x0, xref, xbar);
+  ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, ou, parameter_blocks, x0, xref, xbar);
   prob.AddResidualBlock(costfn, NULL, parameter_blocks);
-  for (int i = 0; i < u.size(); i++) {
+  for (int i = 0; i < ou.size(); i++) {
     prob.SetParameterLowerBound(parameter_blocks[0], i, -v.vparams_.max_motor_torque);
     prob.SetParameterUpperBound(parameter_blocks[0], i, v.vparams_.max_motor_torque);
   }
@@ -497,8 +574,11 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
   options.minimizer_type = ceres::MinimizerType::TRUST_REGION;
 
   options.minimizer_progress_to_stdout = false;
-  options.max_num_iterations = 100;
+  options.max_num_iterations = 20;
   options.linear_solver_type = ceres::DENSE_QR; //CGNR;
+
+  options.update_state_every_iteration = true;
+  //options.evaluation_callback = 
 
   ceres::Solver::Summary summary;
 
@@ -509,7 +589,7 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
 
   LOG(INFO) << summary.FullReport() << std::endl;
 
-  ou = u;
+  //ou = u;
   return summary.IsSolutionUsable();
 }
 
@@ -521,7 +601,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   Vehicle vehicle(params);
   const WayPoint& w = c.waypoints[0];
-  vehicle.set_state(w.x, w.y, normalize_angle(w.theta - M_PI / 6.0), 0, 0);
+  vehicle.set_state(w.x, w.y-3, normalize_angle(w.theta - M_PI / 6.0), 0, 0);
 
   //Eigen::MatrixXd A, B;
   //Eigen::VectorXd C(5);
@@ -549,14 +629,19 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   int target_index = vehicle.find_nearest_index(c, 0);
 
-  auto ou = Eigen::MatrixXd(vehicle.num_input_, params->horizon);
+  //auto ou = Eigen::MatrixXd(vehicle.num_input_, params->horizon);
+  Eigen::MatrixXd ou = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(vehicle.num_input_, params->horizon);
   auto ox = Eigen::MatrixXd(vehicle.num_state_, params->horizon + 1);
 
   Eigen::MatrixXd xref;
   while (t < params->max_time) {
     LOG(INFO) << "------------------------------------------------------------------------------------------------------------------------------";
     std::tie(xref, target_index) = calc_ref_trajectory(vehicle, c, params, target_index);
-    bool sol_found = iterative_linear_mpc_control(vehicle, xref, ou, params);
+    bool sol_found;
+    {
+      ScopedTime st("iterative_linear_mpc_control");
+      sol_found = iterative_linear_mpc_control(vehicle, xref, ou, params);
+    }
     if (!sol_found) {
       LOG(WARNING) << "Failed to compute control. exit.";
       return;
@@ -565,7 +650,8 @@ void main1(const std::shared_ptr<Parameters>& params) {
     //ou(1, 0) = 0.09;
     Eigen::MatrixXd motion = vehicle.predict_motion(vehicle.get_state(), ou, xref);
     LOG(INFO) << "-- state:  ----";
-    LOG(INFO) << vehicle.get_state();
+    Eigen::IOFormat stateformat(4, Eigen::DontAlignCols, ", ", ", ", "", "", "", "");
+    LOG(INFO) << vehicle.get_state().format(stateformat);
     LOG(INFO) << "-- input:  ----";
     LOG(INFO) << ou(0, 0) << ", " << ou(1, 0);
     LOG(INFO) << "-- inputs: ----";
@@ -578,6 +664,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
     logging_thetadot.push_back(vehicle.get_state()(3));
     logging_v.push_back(vehicle.get_state()(4));
     logging_u.push_back(ou.col(0));
+    logging_t.push_back(t);
 
     c.plot();
 
@@ -603,6 +690,8 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
     plt::axis("equal");
     plt::grid(true);
+    plt::xlim(-5 + vehicle.get_state()(0), 5 + vehicle.get_state()(0));
+    plt::ylim(-5 + vehicle.get_state()(1), 5 + vehicle.get_state()(1));
     std::stringstream ss;
     ss << "time[s] " << t << " | speed[m/s] " << vehicle.get_state()(4);
     plt::title(ss.str());
@@ -610,105 +699,68 @@ void main1(const std::shared_ptr<Parameters>& params) {
     plt::clf();
 
     t += params->dt;
-    //std::cin.get();
+    //if (t == params->dt) {
+      //std::cin.get();
+    //}
+    if (vehicle.is_arrived(c, w, target_index)) {
+      break;
+    }
+    //if (t > 10) {
+      //break;
+    //}
   }
+  plt::clf();
+  plt::plot(logging_t, logging_v, "-r");
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("Speed [m/s]");
+  plt::show();
+
+  std::vector<double> logging_u0, logging_u1;
+  for (auto&& v : logging_u) {
+    logging_u0.push_back(v(0));
+    logging_u1.push_back(v(1));
+  }
+  plt::clf();
+  plt::plot(logging_t, logging_u0);
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("input");
+  plt::show();
+
+  plt::clf();
+  plt::plot(logging_t, logging_u1);
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("input");
+  plt::show();
 }
 
-DEFINE_string(course_path, "course_path", "the file path to path.csv");
+DEFINE_string(parameters_path, "parameters_path", "the file path to params.json");
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
 
   std::shared_ptr<Parameters> params = std::make_shared<Parameters>();
-  params->course_path = FLAGS_course_path;
+  
+  fs::path p(FLAGS_parameters_path.c_str());
+  if (fs::exists(p)) {
+    std::ifstream t(p.string());
+    std::stringstream buffer;
+    buffer << t.rdbuf();
+    picojson::value v;
+    std::string err = picojson::parse(v, buffer.str());
+    if (!err.empty()) {
+      LOG(ERROR) << err;
+      exit(1);
+    }
+    params->load_json(v);
+  } else {
+    exit(1);
+  }
 
   params->print(LOG(INFO));
   main1(params);
   return 0;
 }
-
-// class QuadratiCostFunction : public ceres::SizedCostFunction<1, 1> {
-// public:
-//   QuadratiCostFunction() {}
-//   virtual ~QuadratiCostFunction() {}
-//   virtual bool Evaluate(double const* const* parameters, double* residuals, double** jacobians) const {
-//     const double x = parameters[0][0];
-//     residuals[0] = 10 - x;
-//
-//     if (jacobians != nullptr && jacobians[0] != nullptr) {
-//       jacobians[0][0] = -1.0;
-//     }
-//     return true;
-//   }
-// };
-//
-// struct F4 {
-//   template <typename T>
-//   bool operator()(const T* const x1, const T* const x4, T* residual) const {
-//     residual[0] = T(std::sqrt(10.0)) * (x1[0] - x4[0]) * (x1[0] - x4[0]);
-//     return true;
-//   }
-// };
-//
-// struct F3 {
-//   template <typename T>
-//   bool operator()(const T* const x2, const T* const x3, T* residual) const {
-//     residual[0] = (x2[0] - 2.0 * x3[0]) * (x2[0] - 2.0 * x3[0]);
-//     return true;
-//   }
-// };
-//
-// struct F2 {
-//   template <typename T>
-//   bool operator()(const T* const x3, const T* const x4, T* residual) const {
-//     residual[0] = T(std::sqrt(5.0)) * (x3[0] - x4[0]);
-//     return true;
-//   }
-// };
-//
-// struct F1 {
-//   template <typename T>
-//   bool operator()(const T* const x1, const T* const x2, T* residual) const {
-//     residual[0] = x1[0] + 10.0 * x2[0];
-//     return true;
-//   }
-// };
-// DEFINE_string(minimizer, "trust_region", "Minimizer type to use, choices are: line_search & trust_region");
-
-//    gflags::ParseCommandLineFlags(&argc, &argv, true);
-//    google::InitGoogleLogging(argv[0]);
-//
-//    double x1 = 3.0;
-//    double x2 = -1.0;
-//    double x3 = 0.0;
-//    double x4 = 1.0;
-//
-//    ceres::Problem prob;
-//
-//    // ceres::CostFunction* costfn = new ceres::AutoDiffCostFunction<CostFunctor, 1, 1>(new CostFunctor);
-//    // ceres::CostFunction* costfn = new QuadratiCostFunction();
-//    // prob.AddResidualBlock(costfn, NULL, &x);
-//    prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F1, 1, 1, 1>(new F1), NULL, &x1, &x2);
-//    prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F2, 1, 1, 1>(new F2), NULL, &x3, &x4);
-//    prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F3, 1, 1, 1>(new F3), NULL, &x2, &x3);
-//    prob.AddResidualBlock(new ceres::AutoDiffCostFunction<F4, 1, 1, 1>(new F4), NULL, &x1, &x4);
-//
-//    ceres::Solver::Options options;
-//    LOG_IF(FATAL, !ceres::StringToMinimizerType(FLAGS_minimizer, &options.minimizer_type))
-//        << "Invalid minimizer: " << FLAGS_minimizer << ", valid options are: trust_region and line_search.";
-//
-//    options.minimizer_progress_to_stdout = true;
-//    options.max_num_iterations = 100;
-//    options.linear_solver_type = ceres::CGNR;
-//
-//    ceres::Solver::Summary summary;
-//
-//    {
-//        ScopedTime time("optimization");
-//        ceres::Solve(options, &prob, &summary);
-//    }
-//
-//    std::cout << summary.FullReport() << std::endl;
-//    std::cout << "Final x1 = " << x1 << ", x2 = " << x2 << ", x3 = " << x3 << ", x4 = " << x4 << "\n";
-
