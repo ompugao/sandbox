@@ -416,7 +416,7 @@ public:
     return state_;
   }
 
-  void get_state(double& x, double& y, double& theta, double& thetadot, double& v) {
+  void get_state(double& x, double& y, double& theta, double& thetadot, double& v) const {
     x = state_(0);
     y = state_(1);
     theta = state_(2);
@@ -454,8 +454,13 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
   xref(4, 0) = c.waypoints[i_closest].speed;
 
   double travel = 0.0;
+
+
+  double x, y, theta, thetadot, vel;
+  double t = 0;
+  v.get_state(x, y, theta, thetadot, vel);
   for (int i = 1; i < params->horizon + 1; i++) {
-    travel += std::abs(v.get_state()(4)) * params->dt;
+    travel += std::abs(vel) * params->dt;
     int dind = static_cast<int>(travel / params->dl);
     int j = i_closest + dind;
     if (j >= c.size()) {
@@ -533,6 +538,9 @@ public:
     for (int t = 0; t < params_->horizon; t++) {
       vehicle_->get_linear_matrix(xbar_.cast<double>()(4, t), xbar_.cast<double>()(2, t), A_, B_, C_);
       x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u.col(t) + C_;
+      //if (x_.col(t+1)(4) > params_->target_speed) {
+        //return false;
+      //}
       if (t < params_->horizon - 1) {
         udiff_.col(t) = u.col(t + 1) - u.col(t);
       }
@@ -733,11 +741,13 @@ void main1(const std::shared_ptr<Parameters>& params) {
     LOG(INFO) << ou;
     LOG(INFO) << "---------------";
     vehicle.set_state(vehicle.next_state(vehicle.get_state(), ou.col(0)));
-    logging_x.push_back(vehicle.get_state()(0));
-    logging_y.push_back(vehicle.get_state()(1));
-    logging_theta.push_back(vehicle.get_state()(2));
-    logging_thetadot.push_back(vehicle.get_state()(3));
-    logging_v.push_back(vehicle.get_state()(4));
+
+    vehicle.get_state(x, y, theta, thetadot, v);
+    logging_x.push_back(x);
+    logging_y.push_back(y);
+    logging_theta.push_back(theta);
+    logging_thetadot.push_back(thetadot);
+    logging_v.push_back(v);
     logging_u.push_back(ou.col(0));
     logging_t.push_back(t);
 
@@ -766,10 +776,10 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
     plt::axis("equal");
     plt::grid(true);
-    plt::xlim(-5 + vehicle.get_state()(0), 5 + vehicle.get_state()(0));
-    plt::ylim(-5 + vehicle.get_state()(1), 5 + vehicle.get_state()(1));
+    plt::xlim(-5 + x, 5 + x);
+    plt::ylim(-5 + y, 5 + y);
     std::stringstream ss;
-    ss << "time[s] " << t << " | speed[m/s] " << vehicle.get_state()(4);
+    ss << "time[s] " << t << " | speed[m/s] " << v;
     plt::title(ss.str());
     plt::pause(0.0001);
     plt::clf();
