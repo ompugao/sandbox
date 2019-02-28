@@ -223,9 +223,9 @@ public:
   const double damping_gain = 0.00001;
 
   const double max_speed = 5.0;
-  const double min_speed = -2.0;
+  const double min_speed = -5.0;
 
-  const double max_motor_torque = 1.57;
+  const double max_motor_torque = 1.57 * 4;
   const double max_motor_torque_vel = 1.57;
 };
 
@@ -315,81 +315,78 @@ public:
 
     const double l = vparams_.width / 2.0;
 
-    A = Eigen::MatrixXd::Identity(num_state_, num_state_);
-    B = Eigen::MatrixXd::Zero(num_state_, num_input_);
-    C = Eigen::VectorXd::Zero(num_state_);
+    A_ = Eigen::MatrixXd::Identity(num_state_, num_state_);
+    B_ = Eigen::MatrixXd::Zero(num_state_, num_input_);
+    C_ = Eigen::VectorXd::Zero(num_state_);
 
-    A(0, 3) += params_->dt;
-    A(1, 4) += params_->dt;
-    A(2, 5) += params_->dt;
+    A_(2, 5) += params_->dt;
 
-    double coeff1 = std::cos(vparams_.psi) / (vparams_.mass * vparams_.wheel_radius * vparams_.wheel_radius +
-                                              2 * vparams_.Iw * std::cos(psi) * std::cos(psi));
+    const double& psi = vparams_.psi;
+    double coeff1 = std::cos(psi) / (vparams_.mass * vparams_.wheel_radius * vparams_.wheel_radius +
+                                     2 * vparams_.Iw * std::cos(psi) * std::cos(psi));
 
-    A(3, 3) += params_->dt * coeff1 * (-2 * vparams_->damping_gain * std::cos(vparams_->psi));
-    B(3, 0) += params_->dt * coeff1 * vparams_->wheel_radius * vparams_->input_gain;
-    B(3, 1) += params_->dt * (-coeff1 * vparams_->wheel_radius * vparams_->input_gain);
+    A_(3, 3) += params_->dt * coeff1 * (-2 * vparams_.damping_gain * std::cos(psi));
+    B_(3, 0) += params_->dt * coeff1 * vparams_.wheel_radius * vparams_.input_gain;
+    B_(3, 1) += params_->dt * (-coeff1 * vparams_.wheel_radius * vparams_.input_gain);
 
-    double b = l * vparams_.Iw * (1 - 2 * std::sin(vparams_.psi)) /
+    double b = l * vparams_.Iw * (1 - 2 * std::sin(psi)) /
                (vparams_.Iv * vparams_.wheel_radius * vparams_.wheel_radius + 3 * vparams_.Iw * l * l);
-    double denom = vparams_->mass * vparams_->wheel_radius * vparams_->wheel_radius +
-                   vparams_->Iw * (1 + 2 * std::sin(vparams_->psi)) +
-                   (l * l * vparams_->Iw * vparams_->Iw * (1 - 2 * std::sin(vparams_->psi) * std::sin(vparams_->psi)) /
-                    (vparams_->Iv * vparams_->wheel_radius * vparams_->wheel_radius + 3 * vparams_->Iw * l * l));
+    double denom = vparams_.mass * vparams_.wheel_radius * vparams_.wheel_radius +
+                   vparams_.Iw * (1 + 2 * std::sin(psi)) +
+                   (l * l * vparams_.Iw * vparams_.Iw * (1 - 2 * std::sin(psi)) * (1 - 2 * std::sin(psi))) /
+                       (vparams_.Iv * vparams_.wheel_radius * vparams_.wheel_radius + 3 * vparams_.Iw * l * l);
 
-    A(4, 4) += params_->dt *
-               (-vparams_->damping_gain * (1 + 2 * std::sin(vparams_->psi) * std::sin(vparams_->psi)) +
-                b * vparams_->damping_gain * l(1 - 2 * std::sin(vparams_->psi))) /
-               denom;
-    A(4, 5) +=
-        params_->dt *
-        (vparams_->damping_gain * l * (1 - 2 * std::sin(vparams_->psi)) - 3 * b * vparams_->damping_gain * l * l) /
-        denom;
-    B(4, 0) += params_->dt *
-               (vparams_->input_gain * vparams_->wheel_radius * std::sin(vparams_->psi) +
-                b * vparams_->wheel_radius * l * vparams_->input_gain) /
-               denom;
-    B(4, 1) += params_->dt *
-               (vparams_->input_gain * vparams_->wheel_radius * std::sin(vparams_->psi) +
-                b * vparams_->wheel_radius * l * vparams_->input_gain) /
-               denom;
-    B(4, 2) +=
-        params_->dt *
-        (-vparams_->input_gain * vparams_->wheel_radius + b * vparams_->wheel_radius * l * vparams_->input_gain) /
-        denom;
+    A_(4, 4) += params_->dt *
+                (-vparams_.damping_gain * (1 + 2 * std::sin(psi) * std::sin(psi)) +
+                 b * vparams_.damping_gain * l * (1 - 2 * std::sin(psi))) /
+                denom;
+    A_(4, 5) += params_->dt *
+                (vparams_.damping_gain * l * (1 - 2 * std::sin(psi)) - 3 * b * vparams_.damping_gain * l * l) / denom;
+    B_(4, 0) += params_->dt *
+                (vparams_.input_gain * vparams_.wheel_radius * std::sin(psi) +
+                 b * vparams_.wheel_radius * l * vparams_.input_gain) /
+                denom;
+    B_(4, 1) += params_->dt *
+                (vparams_.input_gain * vparams_.wheel_radius * std::sin(psi) +
+                 b * vparams_.wheel_radius * l * vparams_.input_gain) /
+                denom;
+    B_(4, 2) += params_->dt *
+                (-vparams_.input_gain * vparams_.wheel_radius + b * vparams_.wheel_radius * l * vparams_.input_gain) /
+                denom;
 
+    double a = l * vparams_.Iw * (2 * std::sin(psi) - 1) /
+               (vparams_.mass * vparams_.wheel_radius * vparams_.wheel_radius + vparams_.Iw * (1 + 2 * std::sin(psi)));
+    denom = vparams_.Iv * vparams_.wheel_radius * vparams_.wheel_radius + 3 * vparams_.Iw * l * l -
+            (l * l * vparams_.Iw * vparams_.Iw * (1 - 2 * std::sin(psi)) * (1 - 2 * std::sin(psi))) /
+                (vparams_.mass * vparams_.wheel_radius * vparams_.wheel_radius + vparams_.Iw * (1 + 2 * std::sin(psi)));
+
+    A_(5, 4) += params_->dt * (-(vparams_.damping_gain * l * (2 * std::sin(psi) - 1) -
+                                 a * vparams_.damping_gain * (1 + 2 * std::sin(psi) * std::sin(psi))));
+    A_(5, 5) +=
+        params_->dt * (-(3 * vparams_.damping_gain * l * l + a * vparams_.damping_gain * l * (1 - 2 * std::sin(psi))));
+    B_(5, 0) += params_->dt * (vparams_.wheel_radius * l * vparams_.input_gain -
+                               a * vparams_.input_gain * vparams_.wheel_radius * std::sin(psi));
+    B_(5, 1) += params_->dt * (vparams_.wheel_radius * l * vparams_.input_gain -
+                               a * vparams_.input_gain * vparams_.wheel_radius * std::sin(psi));
+    B_(5, 2) +=
+        params_->dt * (vparams_.wheel_radius * l * vparams_.input_gain + a * vparams_.input_gain * vparams_.wheel_radius);
   }
 
   virtual ~Vehicle() {}
-  void get_linear_matrix(double v, double theta, Eigen::MatrixXd& A, Eigen::MatrixXd& B, Eigen::VectorXd& C) const {
-    const double l = vparams_.width / 2.0;
-    A = Eigen::MatrixXd::Identity(num_state_, num_state_);
-    B = Eigen::MatrixXd::Zero(num_state_, num_input_);
-    C = Eigen::VectorXd::Zero(num_state_);
+  void get_linear_matrix(double vx, double vy, double theta, Eigen::MatrixXd& A, Eigen::MatrixXd& B,
+                         Eigen::VectorXd& C) const {
+    A = A_;
+    B = B_;
+    C = C_;
 
-    A(0, 3) += params_->dt;
-    A(1, 4) += params_->dt;
-    A(2, 5) += params_->dt;
-
-    A(1, 4) += params_->dt * std::sin(theta);
-    A(2, 3) += params_->dt * 1.0;
-    A(3, 3) += params_->dt * (-2.0 * vparams_.damping_gain * l * l) /
-               (vparams_.wheel_radius * vparams_.Iv + l * l * 2.0 * vparams_.Iw);
-    A(4, 4) += params_->dt * (-2.0 * vparams_.damping_gain) /
-               (vparams_.wheel_radius * vparams_.wheel_radius * vparams_.mass + 2.0 * vparams_.Iw);
-
-    const double b1 = vparams_.wheel_radius * vparams_.input_gain * l /
-                      (vparams_.wheel_radius * vparams_.wheel_radius * vparams_.Iv + l * l * 2 * vparams_.Iw);
-    const double b2 = vparams_.wheel_radius * vparams_.input_gain /
-                      (vparams_.wheel_radius * vparams_.wheel_radius * vparams_.mass + 2 * vparams_.Iw);
-    B(3, 0) += params_->dt * b1;
-    B(3, 1) += params_->dt * (-b1);
-    B(4, 0) += params_->dt * b2;
-    B(4, 1) += params_->dt * b2;
-
-    // C(0) = params_->dt * v * std::sin(theta) * theta;
-    // C(1) = -params_->dt * v * std::cos(theta) * theta;
-
+    A(0, 2) += params_->dt * (-vx * std::sin(theta) - vy * std::cos(theta));
+    A(0, 3) += params_->dt * std::cos(theta);
+    A(0, 4) += params_->dt * (-std::sin(theta));
+    A(1, 2) += params_->dt * (vx * std::cos(theta) - vy * std::sin(theta));
+    A(1, 3) += params_->dt * std::sin(theta);
+    A(1, 4) += params_->dt * std::cos(theta);
+    C(0) = params_->dt * (vx * std::sin(theta) + vy * std::cos(theta)) * theta;
+    C(1) = params_->dt * (-vx * std::cos(theta) + vy * std::sin(theta)) * theta;
     return;
   }
 
@@ -407,17 +404,21 @@ public:
     plt::plot({state_(0)}, {state_(1)}, "*g");
   }
 
-  Eigen::VectorXd next_state(const Eigen::VectorXd& state, Eigen::Vector2d u) const {
-    Eigen::Vector2d u_copy = u;
+  Eigen::VectorXd next_state(const Eigen::VectorXd& state, Eigen::Vector3d u) const {
+    Eigen::Vector3d u_copy = u;
     u_copy(0) = std::clamp(u(0), -vparams_.max_motor_torque, vparams_.max_motor_torque);
     u_copy(1) = std::clamp(u(1), -vparams_.max_motor_torque, vparams_.max_motor_torque);
+    u_copy(2) = std::clamp(u(2), -vparams_.max_motor_torque, vparams_.max_motor_torque);
 
     Eigen::MatrixXd A, B;
-    Eigen::VectorXd C(5);
-    get_linear_matrix(state(4), state(2), A, B, C);
+    Eigen::VectorXd C(num_state_);
+    get_linear_matrix(state(3), state(4), state(2), A, B, C);
 
     Eigen::VectorXd new_state = A * state + B * u_copy + C;
-    double v = std::clamp(new_state(4), vparams_.min_speed, vparams_.max_speed);
+    double v;
+    v = std::clamp(new_state(3), vparams_.min_speed, vparams_.max_speed);
+    new_state(3) = v;
+    v = std::clamp(new_state(4), vparams_.min_speed, vparams_.max_speed);
     new_state(4) = v;
     return new_state;
   }
@@ -449,12 +450,13 @@ public:
     return xbar;
   }
 
-  void set_state(double x, double y, double theta, double thetadot, double v) {
+  void set_state(double x, double y, double theta, double vx, double vy, double thetadot) {
     state_(0) = x;
     state_(1) = y;
     state_(2) = theta;
-    state_(3) = thetadot;
-    state_(4) = v;
+    state_(3) = vx;
+    state_(4) = vy;
+    state_(5) = thetadot;
   }
 
   void set_state(const Eigen::MatrixXd& state) {
@@ -465,18 +467,19 @@ public:
     return state_;
   }
 
-  void get_state(double& x, double& y, double& theta, double& thetadot, double& v) {
+  void get_state(double& x, double& y, double& theta, double& vx, double& vy, double& thetadot) const {
     x = state_(0);
     y = state_(1);
     theta = state_(2);
-    thetadot = state_(3);
-    v = state_(4);
+    vx = state_(3);
+    vy = state_(4);
+    thetadot = state_(5);
   }
 
   bool is_arrived(const Course& c, const WayPoint& w, int iw) {
     double d = std::hypot(state_(0) - w.x, state_(1) - w.y);
     bool closeenough = (d < params_->goal_distance_tolerance) && (c.size() == iw + 1);
-    bool stopped = std::abs(state_(4)) < params_->stop_speed;
+    bool stopped = std::abs(state_(3)) < params_->stop_speed && std::abs(state_(4)) < params_->stop_speed;
     return closeenough && stopped;
   }
 
@@ -486,6 +489,8 @@ public:
   std::shared_ptr<Parameters> params_;
   const int num_state_ = 6;
   const int num_input_ = 3;
+
+  Eigen::MatrixXd A_, B_, C_;
 };
 
 std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Course& c,
@@ -499,12 +504,18 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
   xref(0, 0) = c.waypoints[i_closest].x;
   xref(1, 0) = c.waypoints[i_closest].y;
   xref(2, 0) = c.waypoints[i_closest].theta;
-  xref(3, 0) = 0;
-  xref(4, 0) = c.waypoints[i_closest].speed;
+  xref(3, 0) = c.waypoints[i_closest].speed;
+  xref(4, 0) = 0;
+  xref(5, 0) = 0;
+
+  double x, y, theta, vx, vy, thetadot;
+  double t = 0;
+  v.get_state(x, y, theta, vx, vy, thetadot);
+  double vel = std::hypot(vx, vy);
 
   double travel = 0.0;
   for (int i = 1; i < params->horizon + 1; i++) {
-    travel += std::abs(v.get_state()(4)) * params->dt;
+    travel += std::abs(vel) * params->dt;
     int dind = static_cast<int>(travel / params->dl);
     int j = i_closest + dind;
     if (j >= c.size()) {
@@ -515,8 +526,9 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
     xref(0, i) = w.x;
     xref(1, i) = w.y;
     xref(2, i) = w.theta;
-    xref(3, i) = 0;
-    xref(4, i) = w.speed;
+    xref(3, i) = w.speed;
+    xref(4, i) = 0;
+    xref(5, i) = 0;
   }
   return std::move(std::make_pair(xref, i_closest));
 }
@@ -580,7 +592,8 @@ public:
 
     x_.col(0) = x0_.cast<T>();
     for (int t = 0; t < params_->horizon; t++) {
-      vehicle_->get_linear_matrix(xbar_.cast<double>()(4, t), xbar_.cast<double>()(2, t), A_, B_, C_);
+      vehicle_->get_linear_matrix(xbar_.cast<double>()(3, t), xbar_.cast<double>()(4, t), xbar_.cast<double>()(2, t),
+                                  A_, B_, C_);
       x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u.col(t) + C_;
       // if (x_.col(t+1)(4) > params_->target_speed) {
       // return false;
@@ -607,8 +620,8 @@ public:
     // double numer = params_->circumscribed_area_cost / (std::sqrt(2*M_PI) * params_->inflation_radius);
 
     for (auto&& o : params_->obstacles) {
-      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(5, 1);
-      pos << o.x(), o.y(), 0.0, 0.0, 0.0;
+      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(6, 1);
+      pos << o.x(), o.y(), 0.0, 0.0, 0.0, 0.0;
       Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_from_obstacle(vehicle_->num_state_, params_->horizon + 1);
       x_from_obstacle.block(0, 0, 2, x_.cols()) = x_.block(0, 0, 2, x_.cols());
       for (int t = 0; t < params_->horizon + 1; t++) {
@@ -693,6 +706,7 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
   options.minimizer_progress_to_stdout = false;
   options.max_num_iterations = 40;
   options.linear_solver_type = ceres::DENSE_QR;  // CGNR;
+  options.num_threads = 4;
 
   options.update_state_every_iteration = true;
   // options.evaluation_callback =
@@ -730,7 +744,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   Vehicle vehicle(params);
   const WayPoint& w = c.waypoints[0];
-  vehicle.set_state(w.x, w.y - 3, normalize_angle(w.theta - M_PI / 6.0), 0, 0);
+  vehicle.set_state(w.x, w.y - 3, normalize_angle(w.theta - M_PI / 6.0), 0, 0, 0);
 
   // Eigen::MatrixXd A, B;
   // Eigen::VectorXd C(5);
@@ -742,18 +756,19 @@ void main1(const std::shared_ptr<Parameters>& params) {
   // std::cout << "C" << std::endl;
   // std::cout << C << std::endl;
   // std::cout << "----" << std::endl;
-  std::vector<double> logging_x, logging_y, logging_theta, logging_thetadot, logging_v, logging_t;
-  std::vector<Eigen::Vector2d> logging_u;
+  std::vector<double> logging_x, logging_y, logging_theta, logging_thetadot, logging_vx, logging_vy, logging_t;
+  std::vector<Eigen::Vector3d> logging_u;
 
-  double x, y, theta, thetadot, v;
+  double x, y, theta, vx, vy, thetadot;
   double t = 0;
-  vehicle.get_state(x, y, theta, thetadot, v);
+  vehicle.get_state(x, y, theta, vx, vy, thetadot);
   logging_x.push_back(x);
   logging_y.push_back(y);
   logging_theta.push_back(theta);
+  logging_vx.push_back(vx);
+  logging_vy.push_back(vy);
   logging_thetadot.push_back(thetadot);
-  logging_v.push_back(v);
-  logging_u.emplace_back(Eigen::Vector2d::Zero());
+  logging_u.emplace_back(Eigen::Vector3d::Zero());
   logging_t.push_back(t);
 
   int target_index = vehicle.find_nearest_index(c, 0);
@@ -784,16 +799,19 @@ void main1(const std::shared_ptr<Parameters>& params) {
     Eigen::IOFormat stateformat(4, Eigen::DontAlignCols, ", ", ", ", "", "", "", "");
     LOG(INFO) << vehicle.get_state().format(stateformat);
     LOG(INFO) << "-- input:  ----";
-    LOG(INFO) << ou(0, 0) << ", " << ou(1, 0);
+    LOG(INFO) << ou(0, 0) << ", " << ou(1, 0) << ", " << ou(2, 0);
     LOG(INFO) << "-- inputs: ----";
     LOG(INFO) << ou;
     LOG(INFO) << "---------------";
     vehicle.set_state(vehicle.next_state(vehicle.get_state(), ou.col(0)));
-    logging_x.push_back(vehicle.get_state()(0));
-    logging_y.push_back(vehicle.get_state()(1));
-    logging_theta.push_back(vehicle.get_state()(2));
-    logging_thetadot.push_back(vehicle.get_state()(3));
-    logging_v.push_back(vehicle.get_state()(4));
+
+    vehicle.get_state(x, y, theta, vx, vy, thetadot);
+    logging_x.push_back(x);
+    logging_y.push_back(y);
+    logging_theta.push_back(theta);
+    logging_vx.push_back(vx);
+    logging_vy.push_back(vy);
+    logging_thetadot.push_back(thetadot);
     logging_u.push_back(ou.col(0));
     logging_t.push_back(t);
 
@@ -822,10 +840,10 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
     plt::axis("equal");
     plt::grid(true);
-    plt::xlim(-5 + vehicle.get_state()(0), 5 + vehicle.get_state()(0));
-    plt::ylim(-5 + vehicle.get_state()(1), 5 + vehicle.get_state()(1));
+    //plt::xlim(-5 + x, 5 + x);
+    //plt::ylim(-5 + y, 5 + y);
     std::stringstream ss;
-    ss << "time[s] " << t << " | speed[m/s] " << vehicle.get_state()(4);
+    ss << "time[s] " << t << " | speed[m/s] " << std::hypot(vx, vy);
     plt::title(ss.str());
     plt::pause(0.0001);
     plt::clf();
@@ -842,16 +860,32 @@ void main1(const std::shared_ptr<Parameters>& params) {
     //}
   }
   plt::clf();
-  plt::plot(logging_t, logging_v, "-r");
+  plt::plot(logging_t, logging_vx, "-r");
   plt::grid(true);
   plt::xlabel("Time [s]");
-  plt::ylabel("Speed [m/s]");
+  plt::ylabel("Speed(x) [m/s]");
   plt::show();
 
-  std::vector<double> logging_u0, logging_u1;
+  plt::clf();
+  plt::plot(logging_t, logging_vy, "-r");
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("Speed(y) [m/s]");
+  plt::show();
+
+  plt::clf();
+  plt::plot(logging_t, logging_theta, "-r");
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("theta [rad/s]");
+  plt::show();
+
+
+  std::vector<double> logging_u0, logging_u1, logging_u2;
   for (auto&& v : logging_u) {
     logging_u0.push_back(v(0));
     logging_u1.push_back(v(1));
+    logging_u2.push_back(v(2));
   }
   plt::clf();
   plt::plot(logging_t, logging_u0);
@@ -862,6 +896,120 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   plt::clf();
   plt::plot(logging_t, logging_u1);
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("input");
+  plt::show();
+
+  plt::clf();
+  plt::plot(logging_t, logging_u2);
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("input");
+  plt::show();
+}
+
+void main2(const std::shared_ptr<Parameters>& params) {
+  Vehicle vehicle(params);
+  vehicle.set_state(0,0,M_PI/2.0,0,0,0);
+
+  double x, y, theta, vx, vy, thetadot;
+  double t = 0;
+  vehicle.get_state(x, y, theta, vx, vy, thetadot);
+  std::vector<double> logging_x, logging_y, logging_theta, logging_thetadot, logging_vx, logging_vy, logging_t;
+  std::vector<Eigen::Vector2d> logging_u;
+
+  Eigen::MatrixXd ou = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(vehicle.num_input_, params->horizon);
+  auto ox = Eigen::MatrixXd(vehicle.num_state_, params->horizon + 1);
+
+  Eigen::MatrixXd A, B;
+  Eigen::VectorXd C(vehicle.num_state_);
+  Eigen::VectorXd state;
+
+  Eigen::MatrixXd xref;
+  while (t < params->max_time) {
+    LOG(INFO) << "-----------------------------------------------------------------------------------------------------"
+                 "-------------------------";
+    ou(0, 0) = 0.07;
+    ou(1, 0) = 0.07;
+    ou(2, 0) = -0.07;
+    vehicle.set_state(vehicle.next_state(vehicle.get_state(), ou.col(0)));
+
+    state = vehicle.get_state();
+    vehicle.get_linear_matrix(state(3), state(4), state(2), A, B, C);
+    std::cout << "A" << std::endl;
+    std::cout << A << std::endl;
+    std::cout << "B" << std::endl;
+    std::cout << B << std::endl;
+    std::cout << "C" << std::endl;
+    std::cout << C << std::endl;
+    std::cout << "----" << std::endl;
+
+    vehicle.get_state(x, y, theta, vx, vy, thetadot);
+    logging_x.push_back(x);
+    logging_y.push_back(y);
+    logging_theta.push_back(theta);
+    logging_vx.push_back(vx);
+    logging_vy.push_back(vy);
+    logging_thetadot.push_back(thetadot);
+    logging_u.push_back(ou.col(0));
+    logging_t.push_back(t);
+
+
+    plt::plot(logging_x, logging_y, "ob");
+    vehicle.plot();
+
+    plt::axis("equal");
+    plt::grid(true);
+    plt::xlim(-5 + x, 5 + x);
+    plt::ylim(-5 + y, 5 + y);
+    std::stringstream ss;
+    ss << "time[s] " << t << " | speed[m/s] " << std::hypot(vx, vy);
+    plt::title(ss.str());
+    plt::pause(0.0001);
+    plt::clf();
+
+    t += params->dt;
+    //if (t == params->dt) {
+      //std::cin.get();
+    //}
+  }
+  plt::clf();
+  plt::plot(logging_t, logging_vx, "-r");
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("Speed(x) [m/s]");
+  plt::show();
+
+  plt::clf();
+  plt::plot(logging_t, logging_vy, "-r");
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("Speed(y) [m/s]");
+  plt::show();
+
+  std::vector<double> logging_u0, logging_u1, logging_u2;
+  for (auto&& v : logging_u) {
+    logging_u0.push_back(v(0));
+    logging_u1.push_back(v(1));
+    logging_u2.push_back(v(2));
+  }
+  plt::clf();
+  plt::plot(logging_t, logging_u0);
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("input");
+  plt::show();
+
+  plt::clf();
+  plt::plot(logging_t, logging_u1);
+  plt::grid(true);
+  plt::xlabel("Time [s]");
+  plt::ylabel("input");
+  plt::show();
+
+  plt::clf();
+  plt::plot(logging_t, logging_u2);
   plt::grid(true);
   plt::xlabel("Time [s]");
   plt::ylabel("input");
