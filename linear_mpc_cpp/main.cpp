@@ -219,7 +219,7 @@ public:
   const double Iv = 1.0 / 2 * mass * 0.5 * 0.5;
 
   const double input_gain = 1.0;
-  const double damping_gain = 0.00001;
+  const double damping_gain = 0.001;
 
   const double max_speed = 5.0;
   const double min_speed = -2.0;
@@ -310,7 +310,7 @@ class Vehicle {
 public:
   Vehicle(const std::shared_ptr<Parameters>& env_params) {
     params_ = env_params;
-    state_ = Eigen::VectorXd(5);
+    state_ = Eigen::VectorXd(num_state_);
   }
   virtual ~Vehicle() {}
   void get_linear_matrix(double v, double theta, Eigen::MatrixXd& A, Eigen::MatrixXd& B, Eigen::VectorXd& C) const {
@@ -364,7 +364,7 @@ public:
     u_copy(1) = std::clamp(u(1), -vparams_.max_motor_torque, vparams_.max_motor_torque);
 
     Eigen::MatrixXd A, B;
-    Eigen::VectorXd C(5);
+    Eigen::VectorXd C(num_state_);
     get_linear_matrix(state(4), state(2), A, B, C);
 
     Eigen::VectorXd new_state = A * state + B * u_copy + C;
@@ -551,16 +551,25 @@ public:
         xdiff_.col(t) = x_.col(t) - xref_.col(t);
       }
     }
-    residuals[0] = (xdiff_.block(0, 0, x0_.rows(), params_->horizon).cwiseProduct(params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon))).sum();
-    residuals[1] = (udiff_.cwiseProduct(params_->Rd.cast<T>() * udiff_)).sum();
-    residuals[2] = (xdiff_.col(params_->horizon).cwiseProduct(params_->Qf.cast<T>() * xdiff_.col(params_->horizon))).sum();
-    residuals[3] = (u.cwiseProduct(params_->R.cast<T>() * u)).sum();
-    residuals[4] = (T)0.0;
-    //double denom = (2 * params_->inflation_radius * params_->inflation_radius);
-    //double numer = params_->circumscribed_area_cost / (std::sqrt(2*M_PI) * params_->inflation_radius);
+
+    int cnt = 0;
+    auto residuals_xdiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], vehicle_->num_state_, params_->horizon);
+    cnt += vehicle_->num_state_ * params_->horizon;
+    residuals_xdiff = (params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon));
+
+    auto residuals_udiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], vehicle_->num_input_, params_->horizon - 1);
+    cnt += vehicle_->num_input_ * (params_->horizon - 1);
+    residuals_udiff = (params_->Rd.cast<T>() * udiff_);
+
+    auto residuals_u = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], vehicle_->num_input_, params_->horizon);
+    cnt += vehicle_->num_input_ * params_->horizon;
+    residuals_u = (params_->R.cast<T>() * u);
+
+    // double denom = (2 * params_->inflation_radius * params_->inflation_radius);
+    // double numer = params_->circumscribed_area_cost / (std::sqrt(2*M_PI) * params_->inflation_radius);
 
     for (auto&& o : params_->obstacles) {
-      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(5, 1);
+      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(vehicle_->num_state_, 1);
       pos << o.x(), o.y(), 0.0, 0.0, 0.0;
       Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_from_obstacle(vehicle_->num_state_, params_->horizon + 1);
       x_from_obstacle.block(0, 0, 2, x_.cols()) = x_.block(0, 0, 2, x_.cols());
@@ -569,12 +578,16 @@ public:
         T d = x_from_obstacle.col(t).squaredNorm();
         T b = (T)(params_->inflation_radius + o.r());
         if (d < b) {
-          residuals[4] += (T)(o.a()) * (d - b) * (d - b);
+          residuals[cnt] = (T)(o.a()) * (d - b);
+        } else {
+          residuals[cnt] = T(0);
         }
+        cnt += 1;
       }
-      //residuals[4] += x_from_obstacle.colwise().squaredNorm().exp().sum();
-      //residuals[4] += (-((x_.block(0, 0, 2, x_.cols()).colwise() - pos).colwise().squaredNorm())).exp().sum();
+      // residuals[4] += x_from_obstacle.colwise().squaredNorm().exp().sum();
+      // residuals[4] += (-((x_.block(0, 0, 2, x_.cols()).colwise() - pos).colwise().squaredNorm())).exp().sum();
     }
+
 
     return true;
   }
@@ -605,7 +618,8 @@ public:
     //}
     parameter_blocks.push_back(u.data());
     costfn->AddParameterBlock(u.size());
-    costfn->SetNumResiduals(5);
+    int num_residuals = vehicle.num_state_ * params->horizon + vehicle.num_input_ * (params->horizon - 1) + vehicle.num_input_ * params->horizon + (params->obstacles.size() * (params->horizon + 1));
+    costfn->SetNumResiduals(num_residuals);
     return costfn;
   }
 
@@ -647,6 +661,7 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
   options.minimizer_progress_to_stdout = false;
   options.max_num_iterations = 40;
   options.linear_solver_type = ceres::DENSE_QR; //CGNR;
+  options.num_threads = 4;
 
   options.update_state_every_iteration = true;
   //options.evaluation_callback = 
@@ -776,8 +791,8 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
     plt::axis("equal");
     plt::grid(true);
-    plt::xlim(-5 + x, 5 + x);
-    plt::ylim(-5 + y, 5 + y);
+    //plt::xlim(-5 + x, 5 + x);
+    //plt::ylim(-5 + y, 5 + y);
     std::stringstream ss;
     ss << "time[s] " << t << " | speed[m/s] " << v;
     plt::title(ss.str());

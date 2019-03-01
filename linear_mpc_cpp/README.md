@@ -1,7 +1,7 @@
 # Linear MPC
 - linear model-predictive control using ceres
 
-[![youtube_video](http://img.youtube.com/vi/1wdZg17SAZs/0.jpg)](http://www.youtube.com/watch?v=1wdZg17SAZs "Linear Model-Predictive Control")
+[![Linear Model-Predictive Control](http://img.youtube.com/vi/luqhpQ6KahM/0.jpg)](http://www.youtube.com/watch?v=luqhpQ6KahM "Linear Model-Predictive Control")
 
 # dependencies
 - [ceres-solver](https://ceres-solver.googlesource.com/ceres-solver)

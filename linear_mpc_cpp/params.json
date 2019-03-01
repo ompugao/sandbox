@@ -1,9 +1,9 @@
 {
   "course_path": "./path.csv",
-  "R": [0.1, 0.1],
-  "Rd": [20, 20],
-  "Q": [1, 1, 0.1, 0.0, 1.0],
-  "Qf": [1, 1, 0.1, 0.0, 1.0],
+  "R": [0.316228, 0.316228],
+  "Rd": [2, 2],
+  "Q": [1.5, 1.5, 0.7, 0.0, 1.0],
+  "Qf": [1.5, 1.5, 0.7, 0.0, 1.0],
 
   "goal_distance_tolerance": 1.0,
   "stop_speed": 0.2,
@@ -15,10 +15,10 @@
   "dl": 0.2,
 
   "horizon": 6,
-  "max_iterations": 10,
+  "max_iterations": 100,
   "du_th": 0.001,
 
   "circumscribed_area_cost": 10,
-  "inflation_radius": 2,
-  "obstacles": [[16, -1, 2], [28, 2.5, 2], [40, 9.5, 2], [42, 12, 2], [20, 12, 2]]
+  "inflation_radius": 1,
+  "obstacles": [[16, -1, 1], [28, 2.5, 1], [40, 9.5, 1], [42, 12, 1], [24, 12, 1]]
 }
