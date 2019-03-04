@@ -225,7 +225,7 @@ public:
   const double max_speed = 5.0;
   const double min_speed = -5.0;
 
-  const double max_motor_torque = 1.57* 10;
+  const double max_motor_torque = 1.5;
   const double max_motor_torque_vel = 1.57;
 };
 
@@ -588,7 +588,8 @@ public:
 
     Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_(vehicle_->num_state_, params_->horizon + 1);
     Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> xdiff_(vehicle_->num_state_, params_->horizon + 1),
-        udiff_(vehicle_->num_input_, params_->horizon - 1);
+        udiff_(vehicle_->num_input_, params_->horizon - 1),
+        v_(1, params_->horizon + 1);
 
     x_.col(0) = x0_.cast<T>();
     for (int t = 0; t < params_->horizon; t++) {
@@ -603,16 +604,22 @@ public:
       }
     }
     xdiff_.col(0).setZero();
+    v_.col(0) = x0_.block(4, 0, 2, 1).colwise().norm().cast<T>();
     for (int t = 0; t < params_->horizon + 1; t++) {
       if (t != 0) {
         xdiff_.col(t) = x_.col(t) - xref_.col(t);
+        v_(t) = x_.col(t).block(4, 0, 2, 1).norm();
       }
     }
 
     int cnt = 0;
-    auto residuals_xdiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], vehicle_->num_state_, params_->horizon);
-    cnt += vehicle_->num_state_ * params_->horizon;
-    residuals_xdiff = (params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon));
+    auto residuals_xdiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], 3, params_->horizon);
+    cnt += 3 * params_->horizon;
+    residuals_xdiff = (params_->Q.block(0, 0, 3, 3).cast<T>() * xdiff_.block(0, 0, 3, params_->horizon));
+
+    auto residuals_veldiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], 1, params_->horizon);
+    cnt += 1 * params_->horizon;
+    residuals_veldiff = (params_->Q.block(3, 3, 1, 1).cast<T>() * (xref_.block(4, 0, 2, params_->horizon).colwise().norm() - v_.block(0, 0, 1, params_->horizon)));
 
     auto residuals_udiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(&residuals[cnt], vehicle_->num_input_, params_->horizon - 1);
     cnt += vehicle_->num_input_ * (params_->horizon - 1);
@@ -675,7 +682,8 @@ public:
     //}
     parameter_blocks.push_back(u.data());
     costfn->AddParameterBlock(u.size());
-    int num_residuals = vehicle.num_state_ * params->horizon + vehicle.num_input_ * (params->horizon - 1) + vehicle.num_input_ * params->horizon + (params->obstacles.size() * (params->horizon + 1));
+    //int num_residuals = vehicle.num_state_ * params->horizon + vehicle.num_input_ * (params->horizon - 1) + vehicle.num_input_ * params->horizon + (params->obstacles.size() * (params->horizon + 1));
+    int num_residuals = 4 * params->horizon + vehicle.num_input_ * (params->horizon - 1) + vehicle.num_input_ * params->horizon + (params->obstacles.size() * (params->horizon + 1));
     costfn->SetNumResiduals(num_residuals);
     return costfn;
   }
