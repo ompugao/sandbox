@@ -744,7 +744,7 @@ bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eig
 
   options.minimizer_progress_to_stdout = false;
   options.max_num_iterations = 40;
-  options.linear_solver_type = ceres::DENSE_QR;  // CGNR;
+  options.linear_solver_type = ceres::CGNR;
   options.num_threads = 4;
 
   options.update_state_every_iteration = true;
