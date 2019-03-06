@@ -60,7 +60,7 @@ public:
     //  LOG(WARNING) << "inflation radius is too small! r: " << r << ", inflation radius: " << inflation_radius;
     //  infl = 1;
     //}
-    a_ = circumscribed_area_cost / (inflation_radius * inflation_radius);
+    a_ = circumscribed_area_cost / inflation_radius;
   }
   virtual ~Obstacle() {}
 
@@ -627,12 +627,12 @@ public:
 
     for (auto&& o : params_->obstacles) {
       Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(vehicle_->num_state_, 1);
-      pos << o.x(), o.y(), 0.0, 0.0, 0.0;
+      pos << o.x(), o.y(), 0.0, 0.0, 0.0, 0.0;
       Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_from_obstacle(vehicle_->num_state_, params_->horizon + 1);
       x_from_obstacle.block(0, 0, 2, x_.cols()) = x_.block(0, 0, 2, x_.cols());
       for (int t = 0; t < params_->horizon + 1; t++) {
         x_from_obstacle.col(t) -= pos.cast<T>();
-        T d = x_from_obstacle.col(t).squaredNorm();
+        T d = x_from_obstacle.col(t).norm();
         T b = (T)(params_->inflation_radius + o.r());
         if (d < b) {
           residuals[cnt] = (T)(o.a()) * (d - b);
