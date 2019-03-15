@@ -701,14 +701,15 @@ public:
     int n = (vehicle_->num_input_ + num_dummy_inputs_ + num_constraints_) * params_->horizon;
     Eigen::MatrixXd bases(n, n+1);
     bases.col(0) = b_vec.normalized();
-    Eigen::MatrixXd hs(n+1, n+1);
-    Eigen::VectorXd e(n+1);
+    Eigen::MatrixXd hs = Eigen::MatrixXd::Zero(n+1, n+1);
+    Eigen::VectorXd e = Eigen::VectorXd::Zero(n+1);
     e(0) = 1.0;
 
-    Eigen::VectorXd ys_pre(n+1);
+    Eigen::VectorXd ys_pre = Eigen::VectorXd::Zero(n+1);
 
     auto U_vec = Eigen::Map<Eigen::VectorXd>(U_.data(), U_.size());
-    Eigen::VectorXd du_new;
+    Eigen::VectorXd du_new(n);
+    du_new = Eigen::VectorXd::Zero(n);
     for (int i = 0; i < n; i++) {
       auto du = bases.col(i) * params_->ht;
       Eigen::VectorXd next_U = (U_vec + du);
@@ -739,7 +740,7 @@ public:
       auto ys = pseudoinverse(hsblock) * b_norm * e.segment(0, i+1);
       // auto ys = hs.block(0, 0, i+1, i).completeOrthogonalDecomposition().pseudoInverse() * b_norm * e.segment(0, i+1);
 
-      auto val = b_norm * e.segment(0, i+1) - hs.block(0, 0, i+1, i) * ys.segment(0, i);
+      Eigen::VectorXd val = b_norm * e.segment(0, i+1) - hs.block(0, 0, i+1, i) * ys.segment(0, i);
 
       LOG(INFO) << "i: " << i;
       LOG(INFO) << val;
@@ -1197,6 +1198,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   Eigen::MatrixXd xref;
   while (t < params->max_time) {
+    t += params->dt;
     LOG(INFO) << "-----------------------------------------------------------------------------------------------------"
                  "-------------------------";
     std::tie(xref, target_index) = calc_ref_trajectory(vehicle, c, params, target_index);
@@ -1280,7 +1282,6 @@ void main1(const std::shared_ptr<Parameters>& params) {
     plt::pause(0.0001);
     plt::clf();
 
-    t += params->dt;
     if (t == params->dt) {
       std::cin.get();
     }
