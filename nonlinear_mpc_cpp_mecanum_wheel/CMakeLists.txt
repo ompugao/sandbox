@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 
-project(linear_mpc_cpp)
+project(nonlinear_mpc_cpp)
 
 enable_language(CXX)
 set(CMAKE_CXX_STANDARD 17)
@@ -40,5 +40,9 @@ endif()
 include_directories(${PYTHON_INCLUDE_PATH} ${PYTHON_NUMPY_INCLUDE_DIRS})
 
 # main
-add_executable(main main.cpp)
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} ${GCC_COVERAGE_COMPILE_FLAGS} -fstandalone-debug")
+file(GLOB srcs *.cpp)
+add_executable(main ${srcs})
 target_link_libraries(main ${CERES_LIBRARIES} ${PYTHON_LIBRARIES} gflags stdc++fs)
+#set_target_properties(main PROPERTIES COMPILE_FLAGS -fstandlone-debug)
+

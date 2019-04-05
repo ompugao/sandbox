@@ -18,6 +18,8 @@
   "max_iterations": 50,
   "du_th": 0.001,
 
+  "visualize": true,
+
   "local_area": [12, 12],
 
   "circumscribed_area_cost": 100,
