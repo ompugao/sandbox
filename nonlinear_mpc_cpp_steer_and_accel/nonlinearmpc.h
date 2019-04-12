@@ -22,8 +22,8 @@ public:
   Eigen::MatrixXd compute_F(const Eigen::MatrixXd& states, const Eigen::MatrixXd& lambdas, const Eigen::MatrixXd& U);
 
   const Vehicle* vehicle_;
-  const int num_constraints_ = 5;
-  const int num_dummy_inputs_ = 5;  // == num_constraints_; ?
+  const int num_constraints_ = 2;
+  const int num_dummy_inputs_ = 2;  // == num_constraints_; ?
   std::shared_ptr<Parameters> params_;
 
   Eigen::MatrixXd U_;

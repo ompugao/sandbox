@@ -170,17 +170,15 @@ Eigen::VectorXd NonLinearMPC::compute_previous_lambda(const Eigen::VectorXd& sta
   //     tmp += o->a() * ((d - norm) / norm) * diff * dt;
   //   }
   // }
-  Eigen::MatrixXd A, B;
-  Eigen::VectorXd C;
-  vehicle_->get_linear_matrix_diff(state, A, B, C);
-  tmp += lambda.transpose() * A * dt;
+  Eigen::MatrixXd dfdx = vehicle_->get_dfdz(state, u);
+  tmp += lambda.transpose() * dfdx * dt;
   // clang-format off
-  Eigen::MatrixXd dCdx(num_constraints_, vehicle_->num_state_);
-  dCdx << 0, 0, 0, 0,          0,          0,
-          0, 0, 0, 0,          0,          0,
-          0, 0, 0, 0,          0,          0,
-          0, 0, 0, 0,          0,          0,
-          0, 0, 0, 2*state(3), 2*state(4), 0;
+  // Eigen::MatrixXd dCdx(num_constraints_, vehicle_->num_state_);
+  // dCdx << 0, 0, 0, 0,          0,          0,
+  //         0, 0, 0, 0,          0,          0,
+  //         0, 0, 0, 0,          0,          0,
+  //         0, 0, 0, 0,          0,          0,
+  //         0, 0, 0, 2*state(3), 2*state(4), 0;
   // clang-format on
   // XXX?
   // tmp += mu.transpose() * dCdx * dt;
@@ -193,8 +191,6 @@ Eigen::MatrixXd NonLinearMPC::compute_F(const Eigen::MatrixXd& states, const Eig
   Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> F(step, params_->horizon);
   F.fill(0);
   int head = 0;
-  Eigen::MatrixXd A, B;
-  Eigen::VectorXd C;
   for (int i = 0; i < params_->horizon; i++) {
     // const auto& u = Eigen::Map<const Eigen::VectorXd>(U.block(head, 1, vehicle_->num_input_, 1));
     // const auto& dummy = Eigen::Map<const Eigen::VectorXd(U.block(head + vehicle_->num_input_, 1, num_dummy_inputs_,
@@ -205,39 +201,47 @@ Eigen::MatrixXd NonLinearMPC::compute_F(const Eigen::MatrixXd& states, const Eig
     // compute dH/dU
     // dL/dU
     F.block(0, i, vehicle_->num_input_, 1) += (params_->R * u);
-    F.block(vehicle_->num_input_, i, num_dummy_inputs_, 1) -= Eigen::MatrixXd::Ones(num_dummy_inputs_, 1) * 0.001;
+    // F.block(vehicle_->num_input_, i, num_dummy_inputs_, 1) -= Eigen::MatrixXd::Ones(num_dummy_inputs_, 1) * 0.001;
     // df/dU
-    vehicle_->get_linear_matrix_diff(states.col(i), A, B, C);
-    F.block(0, i, vehicle_->num_input_, 1) += (lambdas.col(i+1).transpose() * B).transpose();
-
+    // Eigen::MatrixXd dfdu = vehicle_->get_dfdu(states.col(i), u);
+    F(0, i) += (lambdas(3, i+1) + 2.0 * mu(0, 0) * u(0, 0));
+    F(1, i) += (lambdas(2, i+1) * states(3, i) / vehicle_->vparams_.wb * std::cos(u(1, 0)) * std::cos(u(1, 0)) + 2.0*mu(1, 0)*u(1, 0));
+    F(2, i) += (- vehicle_->vparams_.phi_v + 2.0*mu(0, 0) * dummy(0, 0));
+    F(3, i) += (- vehicle_->vparams_.phi_omega + 2.0*mu(1, 0) * dummy(1, 0));
 
     // clang-format off
-    Eigen::MatrixXd dCdU(num_constraints_, num_all_inputs);
-    dCdU << 2*u(0, 0),         0,         0,         0, 2*dummy(0, 0),             0,             0,             0,              0,
-                    0, 2*u(1, 0) ,        0,         0,             0, 2*dummy(1, 0),             0,             0,              0,
-                    0,         0, 2*u(2, 0),         0,             0,             0, 2*dummy(2, 0),             0,              0,
-                    0,         0,         0, 2*u(3, 0),             0,             0,             0, 2*dummy(3, 0),              0,
-                    //0,         0,         0,         0,             0,             0,             0,             0,              0;
-                    0,         0,         0,         0,             0,             0,             0,             0, 2*dummy(4,   0);
-    // clang-format on
-    // dC/dU
-    F.block(0, i, num_all_inputs, 1) += (mu.transpose() * dCdU).transpose();
+    ////////// Eigen::MatrixXd dCdU(num_constraints_, num_all_inputs);
+    ////////// dCdU << 2*u(0, 0),         0,         0,         0, 2*dummy(0, 0),             0,             0,             0,              0,
+    //////////                 0, 2*u(1, 0) ,        0,         0,             0, 2*dummy(1, 0),             0,             0,              0,
+    //////////                 0,         0, 2*u(2, 0),         0,             0,             0, 2*dummy(2, 0),             0,              0,
+    //////////                 0,         0,         0, 2*u(3, 0),             0,             0,             0, 2*dummy(3, 0),              0,
+    //////////                 //0,         0,         0,         0,             0,             0,             0,             0,              0;
+    //////////                 0,         0,         0,         0,             0,             0,             0,             0, 2*dummy(4,   0);
+    ////////// // clang-format on
+    ////////// // dC/dU
+    ////////// F.block(0, i, num_all_inputs, 1) += (mu.transpose() * dCdU).transpose();
 
-    // constraints
-    // clang-format off
-    const double& max_motor_torque = vehicle_->vparams_.max_motor_torque;
-    const double max_motor_torque_sqrn = max_motor_torque * max_motor_torque;
-    F(num_all_inputs + 0, i) += u(0, 0)*u(0, 0) + dummy(0, 0)*dummy(0, 0) - max_motor_torque_sqrn;
-    F(num_all_inputs + 1, i) += u(1, 0)*u(1, 0) + dummy(1, 0)*dummy(1, 0) - max_motor_torque_sqrn;
-    F(num_all_inputs + 2, i) += u(2, 0)*u(2, 0) + dummy(2, 0)*dummy(2, 0) - max_motor_torque_sqrn;
-    F(num_all_inputs + 3, i) += u(3, 0)*u(3, 0) + dummy(3, 0)*dummy(3, 0) - max_motor_torque_sqrn;
-    // clang-format on
-    const auto& state = states.col(i);
-    const double& vx = state(3);
-    const double& vy = state(4);
+    ////////// // constraints
+    ////////// // clang-format off
+    ////////// const double& max_motor_torque = vehicle_->vparams_.max_motor_torque;
+    ////////// const double max_motor_torque_sqrn = max_motor_torque * max_motor_torque;
+    ////////// F(num_all_inputs + 0, i) += u(0, 0)*u(0, 0) + dummy(0, 0)*dummy(0, 0) - max_motor_torque_sqrn;
+    ////////// F(num_all_inputs + 1, i) += u(1, 0)*u(1, 0) + dummy(1, 0)*dummy(1, 0) - max_motor_torque_sqrn;
+    ////////// F(num_all_inputs + 2, i) += u(2, 0)*u(2, 0) + dummy(2, 0)*dummy(2, 0) - max_motor_torque_sqrn;
+    ////////// F(num_all_inputs + 3, i) += u(3, 0)*u(3, 0) + dummy(3, 0)*dummy(3, 0) - max_motor_torque_sqrn;
+    ////////// // clang-format on
+    ////////// const auto& state = states.col(i);
+    ////////// const double& vx = state(3);
+    ////////// const double& vy = state(4);
 
-    const double max_speed_sqrn = vehicle_->vparams_.max_speed * vehicle_->vparams_.max_speed;
-    F(num_all_inputs + 4, i) += vx * vx + vy * vy + dummy(4, 0) * dummy(4, 0) - max_speed_sqrn;
+    ////////// const double max_speed_sqrn = vehicle_->vparams_.max_speed * vehicle_->vparams_.max_speed;
+    ////////// F(num_all_inputs + 4, i) += vx * vx + vy * vy + dummy(4, 0) * dummy(4, 0) - max_speed_sqrn;
+    const double& u_a_max = vehicle_->vparams_.u_a_max;
+    const double uu = u_a_max * u_a_max;
+    const double& u_omega_max = vehicle_->vparams_.u_omega_max;
+    const double uu_omega = u_omega_max * u_omega_max;
+    F(num_all_inputs + 0, i) += u(0, 0)*u(0, 0) + dummy(0, 0)*dummy(0, 0) - uu;
+    F(num_all_inputs + 1, i) += u(1, 0)*u(1, 0) + dummy(1, 0)*dummy(1, 0) - uu_omega;
 
     //head += step;
   }

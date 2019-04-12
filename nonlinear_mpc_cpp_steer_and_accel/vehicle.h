@@ -9,6 +9,17 @@ public:
   VehicleParameters() {}
   virtual ~VehicleParameters() {}
 
+
+  const double u_a_max = 1.0;
+  const double u_omega_max = 3.14 / 4;
+  const double phi_v = 0.01;
+  const double phi_omega = 0.01;
+  const double wb = 0.25;
+
+
+
+
+
   const double lf = 0.5;
   const double lb = 0.5;
 
@@ -36,11 +47,10 @@ public:
   Vehicle(const std::shared_ptr<Parameters>& env_params);
 
   virtual ~Vehicle() {}
-  void get_linear_matrix_diff(const Eigen::VectorXd& state, Eigen::MatrixXd& A, Eigen::MatrixXd& B,
-                         Eigen::VectorXd& C) const;
 
-  void get_linear_matrix(const Eigen::VectorXd& state, Eigen::MatrixXd& A, Eigen::MatrixXd& B,
-                         Eigen::VectorXd& C, double dt = -1.0) const;
+  Eigen::VectorXd get_diff(const Eigen::VectorXd& state, const Eigen::VectorXd& u)const ;
+  Eigen::MatrixXd get_dfdz(const Eigen::VectorXd& state, const Eigen::VectorXd& u)const ;
+  Eigen::MatrixXd get_dfdu(const Eigen::VectorXd& state, const Eigen::VectorXd& u)const ;
 
   void plot();
 
@@ -68,8 +78,8 @@ public:
   VehicleParameters vparams_;
 
   std::shared_ptr<Parameters> params_;
-  const int num_state_ = 6;
-  const int num_input_ = 4;
+  const int num_state_ = 4;
+  const int num_input_ = 2;
 
   Eigen::MatrixXd A_, B_, C_;
   Eigen::MatrixXd Abar_, Bbar_, Cbar_;

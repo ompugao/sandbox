@@ -78,234 +78,234 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
   return std::move(std::make_pair(xref, i_closest));
 }
 
-bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar,
-                        const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou);
-bool iterative_linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, Eigen::MatrixXd& ou,
-                                  const std::shared_ptr<Parameters>& params) {
-  int i = 0;
-  bool sol_found = false;
-  for (; i < params->max_iterations; i++) {
-    Eigen::MatrixXd xbar = v.predict_motion(v.get_state(), ou, xref);
-    Eigen::MatrixXd prev_ou = ou;
-    sol_found = linear_mpc_control(v, xref, xbar, v.get_state(), params, ou);
-    if (!sol_found) {
-      LOG(WARNING) << "Solution not found (iter:" << i << ")";
-      continue;
-    }
-    LOG(INFO) << "-- inputs at iteration " << i << ": ----";
-    LOG(INFO) << ou;
-    LOG(INFO) << "-------------------------------";
-    double udiff = (ou - prev_ou).cwiseAbs().sum();
-    LOG(INFO) << ">> udiff: " << udiff;
-    if (udiff < params->du_th) {
-      break;
-    }
-  }
-  LOG(INFO) << "-- finished iteration : " << i;
-  return sol_found;
-}
-
-// static int kStride = 10;
-class MPCCostFunctor : public ceres::EvaluationCallback {
-public:
-  // typedef ceres::DynamicAutoDiffCostFunction<MPCCostFunctor, kStride> MPCCostFunction;
-  // typedef ceres::DynamicCostFunction MPCCostFunction;
-
-  MPCCostFunctor(const Vehicle& vehicle, const std::shared_ptr<Parameters>& params, const Eigen::VectorXd& x0,
-                 const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar, std::vector<Obstacle*>& obstacles) {
-    vehicle_ = &vehicle;
-    params_ = params;
-    x0_ = x0;
-    // x_ = Eigen::MatrixXd::Zero(vehicle_->num_state_, params->horizon + 1);
-    xref_ = xref;
-    xbar_ = xbar;
-    // xdiff_ = Eigen::MatrixXd::Zero(vehicle_->num_state_, params->horizon + 1);
-    // udiff_ = Eigen::MatrixXd::Zero(vehicle_->num_input_, params->horizon + 1);
-    // deriv_ = Eigen::MatrixXd::Zero(vehicle_->num_input_, params->horizon);
-    obstacles_ = obstacles;
-  }
-  virtual ~MPCCostFunctor() {}
-
-  template <typename T>
-  bool operator()(T const* const* parameters, T* residuals) const {
-    // Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> u =
-    const auto u = Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>>(
-        parameters[0], vehicle_->num_input_, params_->horizon);
-
-    Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_(vehicle_->num_state_, params_->horizon + 1);
-    Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> xdiff_(vehicle_->num_state_, params_->horizon + 1),
-        udiff_(vehicle_->num_input_, params_->horizon - 1);
-
-    x_.col(0) = x0_.cast<T>();
-    for (int t = 0; t < params_->horizon; t++) {
-      vehicle_->get_linear_matrix(xbar_.cast<double>().col(t), A_, B_, C_);
-      x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u.col(t) + C_;
-      // if (x_.col(t+1)(4) > params_->target_speed) {
-      // return false;
-      //}
-      if (t < params_->horizon - 1) {
-        udiff_.col(t) = u.col(t + 1) - u.col(t);
-      }
-    }
-    xdiff_.col(0).setZero();
-    for (int t = 0; t < params_->horizon + 1; t++) {
-      if (t != 0) {
-        xdiff_.col(t) = x_.col(t) - xref_.col(t);
-      }
-    }
-
-    int cnt = 0;
-    auto residuals_xdiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(
-        &residuals[cnt], vehicle_->num_state_, params_->horizon);
-    cnt += vehicle_->num_state_ * params_->horizon;
-    residuals_xdiff = (params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon));
-
-    auto residuals_udiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(
-        &residuals[cnt], vehicle_->num_input_, params_->horizon - 1);
-    cnt += vehicle_->num_input_ * (params_->horizon - 1);
-    residuals_udiff = (params_->Rd.cast<T>() * udiff_);
-
-    auto residuals_u = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(
-        &residuals[cnt], vehicle_->num_input_, params_->horizon);
-    cnt += vehicle_->num_input_ * params_->horizon;
-    residuals_u = (params_->R.cast<T>() * u);
-
-    // double denom = (2 * params_->inflation_radius * params_->inflation_radius);
-    // double numer = params_->circumscribed_area_cost / (std::sqrt(2*M_PI) * params_->inflation_radius);
-
-    for (auto&& o : obstacles_) {
-      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(vehicle_->num_state_, 1);
-      pos << o->x(), o->y(), 0.0, 0.0, 0.0, 0.0;
-      Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_from_obstacle(vehicle_->num_state_, params_->horizon + 1);
-      x_from_obstacle.block(0, 0, 2, x_.cols()) = x_.block(0, 0, 2, x_.cols());
-      for (int t = 0; t < params_->horizon + 1; t++) {
-        x_from_obstacle.col(t) -= pos.cast<T>();
-        T d = x_from_obstacle.col(t).norm();
-        T b = (T)(params_->inflation_radius + o->r());
-        if (d < b) {
-          residuals[cnt] = (T)(o->a()) * (b - d);
-        } else {
-          residuals[cnt] = T(0);
-        }
-        cnt += 1;
-      }
-      // residuals[4] += x_from_obstacle.colwise().squaredNorm().exp().sum();
-      // residuals[4] += (-((x_.block(0, 0, 2, x_.cols()).colwise() - pos).colwise().squaredNorm())).exp().sum();
-    }
-
-    return true;
-  }
-  // virtual bool Evaluate(double const* const* parameters, double* residuals, double** jacobians) const {
-  //   Eigen::Matrix<double, 2, Eigen::Dynamic, Eigen::ColMajor> u =
-  //       Eigen::Map<Eigen::Matrix<double, 2, Eigen::Dynamic, Eigen::ColMajor>>(parameters, params_->horizon);
-  //   x_.col(0) = x0_;
-  //   for (int t = 0; t < params->horizon; t++) {
-  //     vehicle_->get_linear_matrix(x0_(4), x0_(2), A_, B_, C_);
-  //     x_.col(t + 1) = A_ * x_.col(t) + B_ * u + C_;
-  //     if (t != 0) {
-  //       xdiff_.col(t) = x_.col(t) - xref_.col(t);
-  //     }
-  //     udiff_.col(t) = u.col(t+1) - u.col(t);
-  //     deriv_.col(t) = (2 * params_->R * u.col(t)) - 2 * params_->R * u_ss_ + (4 * params->Rd * u) + (-2 * params->Rd
-  //     * u_past);
-  //   }
-  // }
-
-  static ceres::CostFunction* Create(const Vehicle& vehicle, const std::shared_ptr<Parameters>& params,
-                                     Eigen::MatrixXd& u, std::vector<double*>& parameter_blocks,
-                                     const Eigen::VectorXd& x0, const Eigen::MatrixXd& xref,
-                                     const Eigen::MatrixXd& xbar) {
-    int num_residuals = vehicle.num_state_ * params->horizon + vehicle.num_input_ * (params->horizon - 1) +
-                        vehicle.num_input_ * params->horizon;
-
-    double x, y, theta, vx, vy, thetadot;
-    double t = 0;
-    vehicle.get_state(x, y, theta, vx, vy, thetadot);
-
-    std::vector<Obstacle*> surrounding_obstacles;
-    if (params->local_area_x < 0 || params->local_area_y < 0) {
-      for (auto&& obj : params->obstacles) {
-        surrounding_obstacles.push_back(&obj);
-        num_residuals += (params->horizon + 1);
-      }
-    } else {
-      for (auto&& obj : params->obstacles) {
-        if (x - params->local_area_x / 2.0 < obj.x() && obj.x() < x + params->local_area_x / 2.0 &&
-            y - params->local_area_y / 2.0 < obj.y() && obj.y() < y + params->local_area_y / 2.0) {
-          surrounding_obstacles.push_back(&obj);
-          num_residuals += (params->horizon + 1);
-        }
-      }
-    }
-
-    MPCCostFunctor* costfunctor = new MPCCostFunctor(vehicle, params, x0, xref, xbar, surrounding_obstacles);
-    ceres::DynamicCostFunction* costfn = new ceres::DynamicAutoDiffCostFunction<MPCCostFunctor, 5>(costfunctor);
-    // for (int i = 0; i < u.cols(); i++) {
-    // parameter_blocks.push_back(&u.data()[u.rows()*i]);
-    //}
-    parameter_blocks.push_back(u.data());
-    costfn->AddParameterBlock(u.size());
-    costfn->SetNumResiduals(num_residuals);
-    return costfn;
-  }
-
-  void PrepareForEvaluation(bool evaluate_jacobians, bool new_evaluation_point) override {}
-
-private:
-  std::shared_ptr<Parameters> params_;
-  const Vehicle* vehicle_;
-  // memory allocations
-  mutable Eigen::VectorXd x0_;
-  mutable Eigen::MatrixXd A_, B_;
-  mutable Eigen::VectorXd C_;
-  Eigen::MatrixXd xref_, xbar_;
-
-  std::vector<Obstacle*> obstacles_;
-
-  // mutable Eigen::MatrixXd A_, B_,Bd_, Q_, Q_final_,  R_, R_delta_, disturbance_, insecure_, u_ss_, x_ss_, x0_,
-  // u_prev_, x_states, u, deriv_wrt_u, u_past, lambdas_x, lambdas_u,lambdas_u_ref, u_horizon, u_current;
-};
-
-bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar,
-                        const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou) {
-  ceres::Problem prob;
-
-  // Eigen::MatrixXd u =
-  // Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(v.num_input_, params->horizon);
-  std::vector<double*> parameter_blocks;
-  ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, ou, parameter_blocks, x0, xref, xbar);
-  prob.AddResidualBlock(costfn, NULL, parameter_blocks);
-  for (int i = 0; i < ou.size(); i++) {
-    prob.SetParameterLowerBound(parameter_blocks[0], i, -v.vparams_.max_motor_torque);
-    prob.SetParameterUpperBound(parameter_blocks[0], i, v.vparams_.max_motor_torque);
-  }
-
-  ceres::Solver::Options options;
-  // LOG_IF(FATAL, !ceres::StringToMinimizerType(FLAGS_minimizer, &options.minimizer_type))
-  //<< "Invalid minimizer: " << FLAGS_minimizer << ", valid options are: trust_region and line_search.";
-  options.minimizer_type = ceres::MinimizerType::TRUST_REGION;
-
-  options.minimizer_progress_to_stdout = false;
-  options.max_num_iterations = 40;
-  options.linear_solver_type = ceres::CGNR;
-  options.num_threads = 4;
-
-  options.update_state_every_iteration = true;
-  // options.evaluation_callback =
-
-  ceres::Solver::Summary summary;
-
-  {
-    ScopedTime time("optimization");
-    ceres::Solve(options, &prob, &summary);
-  }
-
-  LOG(INFO) << summary.FullReport() << std::endl;
-
-  // ou = u;
-  return summary.IsSolutionUsable();
-}
-
+// bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar,
+//                         const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou);
+// bool iterative_linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, Eigen::MatrixXd& ou,
+//                                   const std::shared_ptr<Parameters>& params) {
+//   int i = 0;
+//   bool sol_found = false;
+//   for (; i < params->max_iterations; i++) {
+//     Eigen::MatrixXd xbar = v.predict_motion(v.get_state(), ou, xref);
+//     Eigen::MatrixXd prev_ou = ou;
+//     sol_found = linear_mpc_control(v, xref, xbar, v.get_state(), params, ou);
+//     if (!sol_found) {
+//       LOG(WARNING) << "Solution not found (iter:" << i << ")";
+//       continue;
+//     }
+//     LOG(INFO) << "-- inputs at iteration " << i << ": ----";
+//     LOG(INFO) << ou;
+//     LOG(INFO) << "-------------------------------";
+//     double udiff = (ou - prev_ou).cwiseAbs().sum();
+//     LOG(INFO) << ">> udiff: " << udiff;
+//     if (udiff < params->du_th) {
+//       break;
+//     }
+//   }
+//   LOG(INFO) << "-- finished iteration : " << i;
+//   return sol_found;
+// }
+// 
+// // static int kStride = 10;
+// class MPCCostFunctor : public ceres::EvaluationCallback {
+// public:
+//   // typedef ceres::DynamicAutoDiffCostFunction<MPCCostFunctor, kStride> MPCCostFunction;
+//   // typedef ceres::DynamicCostFunction MPCCostFunction;
+// 
+//   MPCCostFunctor(const Vehicle& vehicle, const std::shared_ptr<Parameters>& params, const Eigen::VectorXd& x0,
+//                  const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar, std::vector<Obstacle*>& obstacles) {
+//     vehicle_ = &vehicle;
+//     params_ = params;
+//     x0_ = x0;
+//     // x_ = Eigen::MatrixXd::Zero(vehicle_->num_state_, params->horizon + 1);
+//     xref_ = xref;
+//     xbar_ = xbar;
+//     // xdiff_ = Eigen::MatrixXd::Zero(vehicle_->num_state_, params->horizon + 1);
+//     // udiff_ = Eigen::MatrixXd::Zero(vehicle_->num_input_, params->horizon + 1);
+//     // deriv_ = Eigen::MatrixXd::Zero(vehicle_->num_input_, params->horizon);
+//     obstacles_ = obstacles;
+//   }
+//   virtual ~MPCCostFunctor() {}
+// 
+//   template <typename T>
+//   bool operator()(T const* const* parameters, T* residuals) const {
+//     // Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> u =
+//     const auto u = Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>>(
+//         parameters[0], vehicle_->num_input_, params_->horizon);
+// 
+//     Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_(vehicle_->num_state_, params_->horizon + 1);
+//     Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> xdiff_(vehicle_->num_state_, params_->horizon + 1),
+//         udiff_(vehicle_->num_input_, params_->horizon - 1);
+// 
+//     x_.col(0) = x0_.cast<T>();
+//     for (int t = 0; t < params_->horizon; t++) {
+//       vehicle_->get_linear_matrix(xbar_.cast<double>().col(t), A_, B_, C_);
+//       x_.col(t + 1) = A_.cast<T>() * x_.col(t) + B_.cast<T>() * u.col(t) + C_;
+//       // if (x_.col(t+1)(4) > params_->target_speed) {
+//       // return false;
+//       //}
+//       if (t < params_->horizon - 1) {
+//         udiff_.col(t) = u.col(t + 1) - u.col(t);
+//       }
+//     }
+//     xdiff_.col(0).setZero();
+//     for (int t = 0; t < params_->horizon + 1; t++) {
+//       if (t != 0) {
+//         xdiff_.col(t) = x_.col(t) - xref_.col(t);
+//       }
+//     }
+// 
+//     int cnt = 0;
+//     auto residuals_xdiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(
+//         &residuals[cnt], vehicle_->num_state_, params_->horizon);
+//     cnt += vehicle_->num_state_ * params_->horizon;
+//     residuals_xdiff = (params_->Q.cast<T>() * xdiff_.block(0, 0, x0_.rows(), params_->horizon));
+// 
+//     auto residuals_udiff = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(
+//         &residuals[cnt], vehicle_->num_input_, params_->horizon - 1);
+//     cnt += vehicle_->num_input_ * (params_->horizon - 1);
+//     residuals_udiff = (params_->Rd.cast<T>() * udiff_);
+// 
+//     auto residuals_u = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>(
+//         &residuals[cnt], vehicle_->num_input_, params_->horizon);
+//     cnt += vehicle_->num_input_ * params_->horizon;
+//     residuals_u = (params_->R.cast<T>() * u);
+// 
+//     // double denom = (2 * params_->inflation_radius * params_->inflation_radius);
+//     // double numer = params_->circumscribed_area_cost / (std::sqrt(2*M_PI) * params_->inflation_radius);
+// 
+//     for (auto&& o : obstacles_) {
+//       Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> pos(vehicle_->num_state_, 1);
+//       pos << o->x(), o->y(), 0.0, 0.0, 0.0, 0.0;
+//       Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> x_from_obstacle(vehicle_->num_state_, params_->horizon + 1);
+//       x_from_obstacle.block(0, 0, 2, x_.cols()) = x_.block(0, 0, 2, x_.cols());
+//       for (int t = 0; t < params_->horizon + 1; t++) {
+//         x_from_obstacle.col(t) -= pos.cast<T>();
+//         T d = x_from_obstacle.col(t).norm();
+//         T b = (T)(params_->inflation_radius + o->r());
+//         if (d < b) {
+//           residuals[cnt] = (T)(o->a()) * (b - d);
+//         } else {
+//           residuals[cnt] = T(0);
+//         }
+//         cnt += 1;
+//       }
+//       // residuals[4] += x_from_obstacle.colwise().squaredNorm().exp().sum();
+//       // residuals[4] += (-((x_.block(0, 0, 2, x_.cols()).colwise() - pos).colwise().squaredNorm())).exp().sum();
+//     }
+// 
+//     return true;
+//   }
+//   // virtual bool Evaluate(double const* const* parameters, double* residuals, double** jacobians) const {
+//   //   Eigen::Matrix<double, 2, Eigen::Dynamic, Eigen::ColMajor> u =
+//   //       Eigen::Map<Eigen::Matrix<double, 2, Eigen::Dynamic, Eigen::ColMajor>>(parameters, params_->horizon);
+//   //   x_.col(0) = x0_;
+//   //   for (int t = 0; t < params->horizon; t++) {
+//   //     vehicle_->get_linear_matrix(x0_(4), x0_(2), A_, B_, C_);
+//   //     x_.col(t + 1) = A_ * x_.col(t) + B_ * u + C_;
+//   //     if (t != 0) {
+//   //       xdiff_.col(t) = x_.col(t) - xref_.col(t);
+//   //     }
+//   //     udiff_.col(t) = u.col(t+1) - u.col(t);
+//   //     deriv_.col(t) = (2 * params_->R * u.col(t)) - 2 * params_->R * u_ss_ + (4 * params->Rd * u) + (-2 * params->Rd
+//   //     * u_past);
+//   //   }
+//   // }
+// 
+//   static ceres::CostFunction* Create(const Vehicle& vehicle, const std::shared_ptr<Parameters>& params,
+//                                      Eigen::MatrixXd& u, std::vector<double*>& parameter_blocks,
+//                                      const Eigen::VectorXd& x0, const Eigen::MatrixXd& xref,
+//                                      const Eigen::MatrixXd& xbar) {
+//     int num_residuals = vehicle.num_state_ * params->horizon + vehicle.num_input_ * (params->horizon - 1) +
+//                         vehicle.num_input_ * params->horizon;
+// 
+//     double x, y, theta, vx, vy, thetadot;
+//     double t = 0;
+//     vehicle.get_state(x, y, theta, vx, vy, thetadot);
+// 
+//     std::vector<Obstacle*> surrounding_obstacles;
+//     if (params->local_area_x < 0 || params->local_area_y < 0) {
+//       for (auto&& obj : params->obstacles) {
+//         surrounding_obstacles.push_back(&obj);
+//         num_residuals += (params->horizon + 1);
+//       }
+//     } else {
+//       for (auto&& obj : params->obstacles) {
+//         if (x - params->local_area_x / 2.0 < obj.x() && obj.x() < x + params->local_area_x / 2.0 &&
+//             y - params->local_area_y / 2.0 < obj.y() && obj.y() < y + params->local_area_y / 2.0) {
+//           surrounding_obstacles.push_back(&obj);
+//           num_residuals += (params->horizon + 1);
+//         }
+//       }
+//     }
+// 
+//     MPCCostFunctor* costfunctor = new MPCCostFunctor(vehicle, params, x0, xref, xbar, surrounding_obstacles);
+//     ceres::DynamicCostFunction* costfn = new ceres::DynamicAutoDiffCostFunction<MPCCostFunctor, 5>(costfunctor);
+//     // for (int i = 0; i < u.cols(); i++) {
+//     // parameter_blocks.push_back(&u.data()[u.rows()*i]);
+//     //}
+//     parameter_blocks.push_back(u.data());
+//     costfn->AddParameterBlock(u.size());
+//     costfn->SetNumResiduals(num_residuals);
+//     return costfn;
+//   }
+// 
+//   void PrepareForEvaluation(bool evaluate_jacobians, bool new_evaluation_point) override {}
+// 
+// private:
+//   std::shared_ptr<Parameters> params_;
+//   const Vehicle* vehicle_;
+//   // memory allocations
+//   mutable Eigen::VectorXd x0_;
+//   mutable Eigen::MatrixXd A_, B_;
+//   mutable Eigen::VectorXd C_;
+//   Eigen::MatrixXd xref_, xbar_;
+// 
+//   std::vector<Obstacle*> obstacles_;
+// 
+//   // mutable Eigen::MatrixXd A_, B_,Bd_, Q_, Q_final_,  R_, R_delta_, disturbance_, insecure_, u_ss_, x_ss_, x0_,
+//   // u_prev_, x_states, u, deriv_wrt_u, u_past, lambdas_x, lambdas_u,lambdas_u_ref, u_horizon, u_current;
+// };
+// 
+// bool linear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar,
+//                         const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou) {
+//   ceres::Problem prob;
+// 
+//   // Eigen::MatrixXd u =
+//   // Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(v.num_input_, params->horizon);
+//   std::vector<double*> parameter_blocks;
+//   ceres::CostFunction* costfn = MPCCostFunctor::Create(v, params, ou, parameter_blocks, x0, xref, xbar);
+//   prob.AddResidualBlock(costfn, NULL, parameter_blocks);
+//   for (int i = 0; i < ou.size(); i++) {
+//     prob.SetParameterLowerBound(parameter_blocks[0], i, -v.vparams_.max_motor_torque);
+//     prob.SetParameterUpperBound(parameter_blocks[0], i, v.vparams_.max_motor_torque);
+//   }
+// 
+//   ceres::Solver::Options options;
+//   // LOG_IF(FATAL, !ceres::StringToMinimizerType(FLAGS_minimizer, &options.minimizer_type))
+//   //<< "Invalid minimizer: " << FLAGS_minimizer << ", valid options are: trust_region and line_search.";
+//   options.minimizer_type = ceres::MinimizerType::TRUST_REGION;
+// 
+//   options.minimizer_progress_to_stdout = false;
+//   options.max_num_iterations = 40;
+//   options.linear_solver_type = ceres::CGNR;
+//   options.num_threads = 4;
+// 
+//   options.update_state_every_iteration = true;
+//   // options.evaluation_callback =
+// 
+//   ceres::Solver::Summary summary;
+// 
+//   {
+//     ScopedTime time("optimization");
+//     ceres::Solve(options, &prob, &summary);
+//   }
+// 
+//   LOG(INFO) << summary.FullReport() << std::endl;
+// 
+//   // ou = u;
+//   return summary.IsSolutionUsable();
+// }
+// 
 bool nonlinear_mpc_control(const Vehicle& v, const Eigen::MatrixXd& xref, const Eigen::MatrixXd& xbar,
                            const Eigen::VectorXd& x0, const std::shared_ptr<Parameters>& params, Eigen::MatrixXd& ou) {return true;}
 
@@ -548,13 +548,6 @@ void main2(const std::shared_ptr<Parameters>& params) {
     }
 
     state = vehicle.get_state();
-    vehicle.get_linear_matrix(state, A, B, C);
-    std::cout << "A" << std::endl;
-    std::cout << A << std::endl;
-    std::cout << "B" << std::endl;
-    std::cout << B << std::endl;
-    std::cout << "C" << std::endl;
-    std::cout << C << std::endl;
     LOG(INFO) << "-- from state:  ----";
     Eigen::IOFormat stateformat(4, Eigen::DontAlignCols, ", ", ", ", "", "", "", "");
     LOG(INFO) << state.format(stateformat);

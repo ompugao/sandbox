@@ -152,14 +152,19 @@ Eigen::VectorXd Vehicle::compute_next_state_rk4(const Eigen::VectorXd& state, Ei
   u_copy(2) = std::clamp(u(2), -vparams_.max_motor_torque, vparams_.max_motor_torque);
   u_copy(3) = std::clamp(u(3), -vparams_.max_motor_torque, vparams_.max_motor_torque);
 
+  Eigen::MatrixXd A, B;
+  Eigen::VectorXd C(num_state_);
+
   auto f = [&](const Eigen::VectorXd& state, const Eigen::VectorXd& u) -> Eigen::VectorXd {
-    Eigen::VectorXd xydiff(num_state_);
-    const double& theta = state(2);
-    const double& vx = state(3);
-    const double& vy = state(4);
-    xydiff(0) = vx * std::cos(theta) - vy * std::sin(theta);
-    xydiff(1) = vx * std::sin(theta) + vy * std::cos(theta);
-    return A_ * state + B_ * u + xydiff;
+    //Eigen::VectorXd xydiff(num_state_);
+    //const double& theta = state(2);
+    //const double& vx = state(3);
+    //const double& vy = state(4);
+
+    //xydiff(0) = vx * std::cos(theta) - vy * std::sin(theta);
+    //xydiff(1) = vx * std::sin(theta) + vy * std::cos(theta);
+    get_linear_matrix_diff(state, A, B, C);
+    return A * state + B * u + C;
   };
   auto k1 = f(state, u);
   auto k2 = f(state + 0.5 * k1 * dt, u);
