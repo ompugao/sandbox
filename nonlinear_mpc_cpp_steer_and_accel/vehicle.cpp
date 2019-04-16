@@ -63,7 +63,7 @@ Eigen::VectorXd Vehicle::get_diff(const Eigen::VectorXd& state, const Eigen::Vec
   const double theta = state[2];
   const double v     = state[3];
   Eigen::VectorXd diff_state(num_state_);
-  diff_state << v*std::cos(theta), v*std::sin(theta), u[0], v / vparams_.wb * u[1];
+  diff_state << v*std::cos(theta), v*std::sin(theta), v / vparams_.wb * std::sin(u[1]), u[0];
   return std::move(diff_state);
 }
 
@@ -75,8 +75,8 @@ Eigen::MatrixXd Vehicle::get_dfdz(const Eigen::VectorXd& state, const Eigen::Vec
   Eigen::MatrixXd dfdz(num_state_, num_state_);
   dfdz << 0, 0, -v*std::sin(theta), std::cos(theta),
           0, 0, v*std::cos(theta), std::sin(theta),
-          0, 0, 0, 0,
-          0, 0, 0, 1.0/vparams_.wb*std::sin(u[1]);
+          0, 0, 0, 1.0/vparams_.wb*std::sin(u[1]),
+          0, 0, 0, 0;
   return std::move(dfdz);
 }
 
@@ -88,8 +88,8 @@ Eigen::MatrixXd Vehicle::get_dfdu(const Eigen::VectorXd& state, const Eigen::Vec
   Eigen::MatrixXd dfdu(num_state_, num_input_);
   dfdu << 0, 0,
           0, 0,
-          1, 0,
-          0,1.0/vparams_.wb*std::cos(u[1]);
+          0,1.0/vparams_.wb*std::cos(u[1]),
+          1, 0;
   return std::move(dfdu);
 }
 
@@ -118,10 +118,10 @@ Eigen::VectorXd Vehicle::compute_next_state_linear(const Eigen::VectorXd& state,
   // u_copy(2) = std::clamp(u(2), -vparams_.max_motor_torque, vparams_.max_motor_torque);
   // u_copy(3) = std::clamp(u(3), -vparams_.max_motor_torque, vparams_.max_motor_torque);
 
-  Eigen::VectorXd new_state = state + get_diff(state, u_copy);
-  double v;
-  v = std::clamp(new_state(3), vparams_.min_speed, vparams_.max_speed);
-  new_state(3) = v;
+  Eigen::VectorXd new_state = state + get_diff(state, u_copy) * dt;
+  //double v;
+  //v = std::clamp(new_state(3), vparams_.min_speed, vparams_.max_speed);
+  //new_state(3) = v;
   return std::move(new_state);
 }
 

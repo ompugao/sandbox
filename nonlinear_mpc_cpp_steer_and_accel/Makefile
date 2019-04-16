@@ -6,7 +6,8 @@ CXX=clang++
 .PHONY: build_debug
 build_debug:
 	mkdir -p build_dbg
-	cd build_dbg && cmake ../ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++ && time $(MAKE) ${MAKEFLAGS}
+	cd build_dbg && cmake ../ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=1 && time $(MAKE) ${MAKEFLAGS}
+	cp build_dbg/compile_commands.json ./
 
 .PHONY: build_release
 build_release:

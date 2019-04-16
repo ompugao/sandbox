@@ -43,7 +43,7 @@ public:
   int N = 10;          // 分割数
   double tf = 1;       // 最終予測時間 (time finite)
   double zeta = 100.0;
-  double iteration_threshold = 1e-6;
+  double iteration_threshold = 1e-3;
 
   bool visualize = true;
 };

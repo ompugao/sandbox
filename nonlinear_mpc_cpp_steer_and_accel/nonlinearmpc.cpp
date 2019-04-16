@@ -33,7 +33,8 @@ NonLinearMPC::NonLinearMPC(const Vehicle& v, const std::shared_ptr<Parameters> p
 }
 
 void NonLinearMPC::initialize() {
-  // U_.middleRows(vehicle_->num_input_, num_dummy_inputs_).fill(0.49);
+  U_.middleRows(0, vehicle_->num_input_).fill(1.0);
+  U_.middleRows(vehicle_->num_input_, num_dummy_inputs_).fill(1.0);
   // U_.middleRows(vehicle_->num_input_+num_dummy_inputs_, num_constraints_).fill(0.011);
 
   //U_.block(vehicle_->num_input_, 0, num_dummy_inputs_, params_->horizon) = Eigen::MatrixXd::Ones(num_dummy_inputs_, params_->horizon)*0.49;
@@ -82,25 +83,29 @@ Eigen::MatrixXd NonLinearMPC::compute_input(const double t /*[s] */, const Eigen
   Eigen::Map<Eigen::VectorXd> U_vec(U_.data(), U_.size());
   Eigen::VectorXd du_new = Eigen::VectorXd::Zero(n);
 
+  static int counter = 0;
+  counter++;
+
   for (int i = 0; i < n; i++) {
     Eigen::VectorXd du = bases.col(i) * params_->ht;
     Eigen::VectorXd next_U = (U_vec + du);
     Eigen::MatrixXd next_U_block = Eigen::Map<Eigen::MatrixXd>(next_U.data(), vehicle_->num_input_+num_dummy_inputs_+num_constraints_, params_->horizon);
-    Eigen::MatrixXd next_u_input_block = next_U_block.block(0, 0, vehicle_->num_input_, params_->horizon);
+    //Eigen::MatrixXd next_u_input_block = next_U_block.block(0, 0, vehicle_->num_input_, params_->horizon);
 
-    Eigen::MatrixXd xbar_next3 = vehicle_->predict_motion(next_state, next_u_input_block, xref, dt);
-    Eigen::MatrixXd lambdas_next3 = predict_adjoint_variables(xbar_next2, xref, obstacles, next_U_block, dt);
+    Eigen::MatrixXd xbar_next3 = vehicle_->predict_motion(next_state, next_U_block.topRows(vehicle_->num_input_), xref, dt);
+    Eigen::MatrixXd lambdas_next3 = predict_adjoint_variables(xbar_next3, xref, obstacles, next_U_block, dt);
     Eigen::MatrixXd F_next3 = compute_F(xbar_next3, lambdas_next3, next_U_block);
 
     Eigen::MatrixXd diff_F = (F_next3 - F_next) / params_->ht;
-    Eigen::Map<Eigen::VectorXd> Av(diff_F.data(), diff_F.size());
+    // Eigen::Map<Eigen::VectorXd> Av(diff_F.data(), diff_F.size());
+    Eigen::VectorXd Av_vec = Eigen::Map<Eigen::VectorXd>(diff_F.data(), diff_F.size());
     Eigen::VectorXd sum_Av = Eigen::VectorXd::Zero(n);
     for (int j = 0; j < i+1; j++) {
-      hs(j, i) =  Av.dot(bases.col(j));
+      hs(j, i) = Av_vec.dot(bases.col(j));
       sum_Av += hs(j, i) * bases.col(j);
     }
 
-    Eigen::VectorXd v_estimated = Av - sum_Av;
+    Eigen::VectorXd v_estimated = Av_vec - sum_Av;
     hs(i+1, i) = v_estimated.norm();
     bases.col(i+1) = v_estimated / hs(i+1, i);
 
@@ -127,14 +132,15 @@ Eigen::MatrixXd NonLinearMPC::compute_input(const double t /*[s] */, const Eigen
     ys_pre = ys;
   }
 
-  Eigen::MatrixXd du_new_block = Eigen::Map<Eigen::MatrixXd>(du_new.data(), (vehicle_->num_input_ + num_dummy_inputs_ + num_constraints_), params_->horizon) * params_->ht; // XXX: params_->dt???
-  U_ += du_new_block;
+  Eigen::MatrixXd du_new_block = Eigen::Map<Eigen::MatrixXd>(du_new.data(), (vehicle_->num_input_ + num_dummy_inputs_ + num_constraints_), params_->horizon);
+  U_ += du_new_block * params_->ht; // XXX: params_->dt???
 
   Eigen::MatrixXd xbar_new = vehicle_->predict_motion(vehicle_->get_state(), U_.block(0, 0, vehicle_->num_input_, params_->horizon), xref, dt);
   Eigen::MatrixXd lambdas_new = predict_adjoint_variables(xbar_new, xref, obstacles, U_, dt);
   Eigen::MatrixXd F_new = compute_F(xbar_new, lambdas_new, U_);
 
-  LOG(INFO) << "new F: " << F_new.norm();
+  double Fnorm = F_new.norm();
+  LOG(INFO) << "new F: " << Fnorm;
   
   Eigen::MatrixXd new_u = U_.block(0, 0, vehicle_->num_input_, U_.cols());
   return std::move(new_u);
@@ -158,7 +164,7 @@ Eigen::VectorXd NonLinearMPC::compute_previous_lambda(const Eigen::VectorXd& sta
   const auto& mu = _u.segment(vehicle_->num_input_ + num_dummy_inputs_, num_constraints_);
 
   Eigen::VectorXd tmp = lambda;
-  tmp += params_->Q * (state - state_ref) * dt;
+  // tmp += params_->Q * (state - state_ref) * dt;
   // for (auto&& o : obstacles) {
   //   Eigen::VectorXd pos(vehicle_->num_state_);
   //   pos << o->x(), o->y(), 0.0, 0.0, 0.0, 0.0;
@@ -200,12 +206,14 @@ Eigen::MatrixXd NonLinearMPC::compute_F(const Eigen::MatrixXd& states, const Eig
     const Eigen::MatrixXd& mu = U.block(num_all_inputs, i, num_constraints_, 1);
     // compute dH/dU
     // dL/dU
-    F.block(0, i, vehicle_->num_input_, 1) += (params_->R * u);
+    // F.block(0, i, vehicle_->num_input_, 1) += (params_->R * u);
     // F.block(vehicle_->num_input_, i, num_dummy_inputs_, 1) -= Eigen::MatrixXd::Ones(num_dummy_inputs_, 1) * 0.001;
     // df/dU
     // Eigen::MatrixXd dfdu = vehicle_->get_dfdu(states.col(i), u);
-    F(0, i) += (lambdas(3, i+1) + 2.0 * mu(0, 0) * u(0, 0));
-    F(1, i) += (lambdas(2, i+1) * states(3, i) / vehicle_->vparams_.wb * std::cos(u(1, 0)) * std::cos(u(1, 0)) + 2.0*mu(1, 0)*u(1, 0));
+    //F(0, i) += (u(0,0) + lambdas(3, i+1) + 2.0 * mu(0, 0) * u(0, 0));
+    //F(1, i) += (u(1,0) + lambdas(2, i+1) * states(3, i) / vehicle_->vparams_.wb * std::cos(u(1, 0)) * std::cos(u(1, 0)) + 2.0*mu(1, 0)*u(1, 0));
+    F(0, i) += (u(0,0) + lambdas(3, i+1) + 2.0 * mu(0, 0) * u(0, 0));
+    F(1, i) += (u(1,0) + lambdas(2, i+1) * states(3, i) / vehicle_->vparams_.wb * std::cos(u(1, 0)) * std::cos(u(1, 0)) + 2.0*mu(1, 0)*u(1, 0));
     F(2, i) += (- vehicle_->vparams_.phi_v + 2.0*mu(0, 0) * dummy(0, 0));
     F(3, i) += (- vehicle_->vparams_.phi_omega + 2.0*mu(1, 0) * dummy(1, 0));
 

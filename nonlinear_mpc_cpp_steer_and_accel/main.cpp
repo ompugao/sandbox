@@ -332,7 +332,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
   Vehicle vehicle(params);
   const WayPoint& w = c.waypoints[0];
   // vehicle.set_state(w.x, w.y - 3, normalize_angle(w.theta - 2 * M_PI / 3.0), 0, 0, 0);
-  vehicle.set_state(w.x, w.y, normalize_angle(w.theta + 2 * M_PI / 3.0), 0, 0, 0);
+  vehicle.set_state(w.x-2.5, w.y-1.5, normalize_angle(35.0 * M_PI / 180), -1, 0, 0);
 
   // Eigen::MatrixXd A, B;
   // Eigen::VectorXd C(5);
@@ -483,12 +483,10 @@ void main1(const std::shared_ptr<Parameters>& params) {
   plt::xlabel("Time [s]");
   plt::ylabel("Speed(y) [m/s]");
 
-  std::vector<double> logging_u0, logging_u1, logging_u2, logging_u3;
+  std::vector<double> logging_u0, logging_u1;
   for (auto&& v : logging_u) {
     logging_u0.push_back(v(0));
     logging_u1.push_back(v(1));
-    logging_u2.push_back(v(2));
-    logging_u3.push_back(v(3));
   }
   plt::figure();
   plt::plot(logging_t, logging_u0);
@@ -501,18 +499,6 @@ void main1(const std::shared_ptr<Parameters>& params) {
   plt::grid(true);
   plt::xlabel("Time [s]");
   plt::ylabel("input_1");
-
-  plt::figure();
-  plt::plot(logging_t, logging_u2);
-  plt::grid(true);
-  plt::xlabel("Time [s]");
-  plt::ylabel("input_2");
-
-  plt::figure();
-  plt::plot(logging_t, logging_u3);
-  plt::grid(true);
-  plt::xlabel("Time [s]");
-  plt::ylabel("input 3");
 
   plt::show();
   }
@@ -553,8 +539,6 @@ void main2(const std::shared_ptr<Parameters>& params) {
     LOG(INFO) << state.format(stateformat);
 
     Eigen::MatrixXd motion = vehicle.predict_motion_rk4(vehicle.get_state(), ou, xref);
-
-    vehicle.set_state(vehicle.compute_next_state_rk4(vehicle.get_state(), ou.col(0)));
 
     LOG(INFO) << "-- to state:  ----";
     state = vehicle.get_state();
@@ -598,6 +582,9 @@ void main2(const std::shared_ptr<Parameters>& params) {
     plt::title(ss.str());
     plt::pause(0.0001);
     plt::clf();
+
+    vehicle.set_state(vehicle.compute_next_state_rk4(vehicle.get_state(), ou.col(0)));
+
 
     }
     t += params->dt;

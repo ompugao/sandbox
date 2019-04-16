@@ -3,7 +3,7 @@
   "R": [0.316228, 0.316228],
   "Rd": [200,200],
   "Q": [1.5, 1.5, 10, 0.8],
-  "Qf": [3.5, 3.5, 30, 2],
+  "Qf": [1,1,1,1],
 
   "goal_distance_tolerance": 1.0,
   "stop_speed": 0.2,
@@ -11,14 +11,15 @@
 
   "target_speed": 3.0,
   "n_indices_search": 10,
-  "dt": 0.2,
+  "dt": 0.1,
+  "tf": 3,
   "dl": 0.2,
 
-  "horizon": 5,
+  "horizon": 10,
   "max_iterations": 50,
   "du_th": 0.001,
 
-  "ht": 0.008,
+  "ht": 0.01,
 
   "visualize": true,
 
