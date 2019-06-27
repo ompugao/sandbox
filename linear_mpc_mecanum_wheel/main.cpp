@@ -22,13 +22,15 @@ public:
   ScopedTime(const std::string& msg = "") : msg_(msg) {
     start_ = std::chrono::system_clock::now();
   }
-  void lap(const std::string& msg) {
+  double lap() {
     const auto duration_time = std::chrono::system_clock::now() - start_;
     const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration_time);
-    std::cerr << "[" << duration_ns.count() << " ns] " << msg << std::endl;
+    const double duration_ms = duration_ns.count()/1000.0/1000.0;
+    return duration_ms;
   }
   virtual ~ScopedTime() {
-    this->lap(msg_);
+    const auto duration_ms = this->lap();
+    std::cerr << "[" << duration_ms << " ms] " << msg_ << std::endl;
   }
 
 private:
@@ -223,20 +225,20 @@ public:
   const double width = 2.0;
   // const double wheel_len = 0.3;
   // const double wheel_width = 0.2;
-  const double wheel_radius = 0.1;
+  const double wheel_radius = 0.152;
   const double wheel_mass = 0.3;
   const double Iw = 1.0 / 2 * wheel_mass * wheel_radius * wheel_radius;
-  const double mass = 5.0;
-  const double Iv = 1.0 / 2 * mass * 0.5 * 0.5;
+  const double mass = 15.0; //40.0;
+  const double Iv = 1.0 / 2 * mass * 0.5*0.5;//0.3 * 0.3;
 
-  const double input_gain = 1.0;
+  const double input_gain = 1.0;//0.7;
   const double damping_gain = 0.01;
 
   const double max_speed = 5.0;
   const double min_speed = -5.0;
 
-  const double max_motor_torque = 1.57 * 1.0;
-  const double max_motor_torque_vel = 1.57;
+  const double max_motor_torque = 1.2;//0.270 * 12; // motor torque * gear ratio
+  const double max_motor_torque_vel = 0.500 * 12;
 };
 
 class WayPoint {
@@ -514,7 +516,7 @@ std::pair<Eigen::MatrixXd, int> calc_ref_trajectory(const Vehicle& v, const Cour
 
   double travel = 0.0;
   for (int i = 1; i < params->horizon + 1; i++) {
-    travel += std::abs(vel) * params->dt;
+    travel += std::abs(c.waypoints[i_closest].speed) * params->dt;
     int dind = static_cast<int>(travel / params->dl);
     int j = i_closest + dind;
     if (j >= c.size()) {
@@ -783,7 +785,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
 
   Vehicle vehicle(params);
   const WayPoint& w = c.waypoints[0];
-  vehicle.set_state(w.x, w.y - 3, normalize_angle(w.theta - M_PI / 6.0), 0, 0, 0);
+  vehicle.set_state(w.x, w.y - 3, normalize_angle(w.theta - 2*M_PI / 3.0), 0, 0, 0);
 
   // Eigen::MatrixXd A, B;
   // Eigen::VectorXd C(5);
@@ -823,9 +825,11 @@ void main1(const std::shared_ptr<Parameters>& params) {
                  "-------------------------";
     std::tie(xref, target_index) = calc_ref_trajectory(vehicle, c, params, target_index);
     bool sol_found;
+    double computation_time = 0;
     {
       ScopedTime st("iterative_linear_mpc_control");
       sol_found = iterative_linear_mpc_control(vehicle, xref, ou, params);
+      computation_time = st.lap();
     }
     if (!sol_found) {
       LOG(WARNING) << "Failed to compute control. exit.";
@@ -882,7 +886,7 @@ void main1(const std::shared_ptr<Parameters>& params) {
     // plt::xlim(-5 + x, 5 + x);
     // plt::ylim(-5 + y, 5 + y);
     std::stringstream ss;
-    ss << "time[s] " << t << " | speed[m/s] " << std::hypot(vx, vy);
+    ss << "time[s] " << t << " | speed[m/s] " << std::hypot(vx, vy) << " | computation[ms] " << computation_time;
     plt::title(ss.str());
     plt::pause(0.0001);
     plt::clf();
@@ -954,7 +958,7 @@ void main2(const std::shared_ptr<Parameters>& params) {
   double t = 0;
   vehicle.get_state(x, y, theta, vx, vy, thetadot);
   std::vector<double> logging_x, logging_y, logging_theta, logging_thetadot, logging_vx, logging_vy, logging_t;
-  std::vector<Eigen::Vector2d> logging_u;
+  std::vector<Eigen::VectorXd> logging_u;
 
   Eigen::MatrixXd ou =
       Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>(vehicle.num_input_, params->horizon);
@@ -964,15 +968,16 @@ void main2(const std::shared_ptr<Parameters>& params) {
   Eigen::VectorXd C(vehicle.num_state_);
   Eigen::VectorXd state;
 
-  Eigen::MatrixXd xref;
+  Eigen::MatrixXd xref(vehicle.num_state_, params->horizon + 1);
   while (t < params->max_time) {
     LOG(INFO) << "-----------------------------------------------------------------------------------------------------"
                  "-------------------------";
-    ou(0, 0) = -0.07;
-    ou(1, 0) = -0.07;
-    ou(2, 0) = -0.07;
-    ou(3, 0) = -0.07;
-
+    for (int i = 0; i < ou.cols(); i++) {
+      ou(0, i) = +0.07;
+      ou(1, i) = -0.07;
+      ou(2, i) = -0.07;
+      ou(3, i) = +0.07;
+    }
     state = vehicle.get_state();
     vehicle.get_linear_matrix(state(3), state(4), state(2), A, B, C);
     std::cout << "A" << std::endl;
@@ -984,6 +989,16 @@ void main2(const std::shared_ptr<Parameters>& params) {
     LOG(INFO) << "-- from state:  ----";
     Eigen::IOFormat stateformat(4, Eigen::DontAlignCols, ", ", ", ", "", "", "", "");
     LOG(INFO) << state.format(stateformat);
+
+    Eigen::MatrixXd motion = vehicle.predict_motion(vehicle.get_state(), ou, xref);
+    std::vector<double> mpc_x, mpc_y;
+    for (int i = 0; i < motion.cols(); i++) {
+      mpc_x.push_back(motion(0, i));
+      mpc_y.push_back(motion(1, i));
+    }
+      
+    plt::plot(mpc_x, mpc_y, "xr");
+
 
     vehicle.set_state(vehicle.next_state(vehicle.get_state(), ou.col(0)));
 
