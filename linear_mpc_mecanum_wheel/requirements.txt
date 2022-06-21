@@ -30,7 +30,7 @@ multiprocess==0.70.7
 nbconvert==5.4.0
 nbformat==4.4.0
 notebook==5.7.4
-numpy==1.16.1
+numpy==1.22.0
 ortools==6.10.6025
 osqp==0.5.0
 pandas==0.24.1
